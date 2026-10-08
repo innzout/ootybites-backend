@@ -15,6 +15,9 @@ automatically at boot — there is no separate migrate step.
 
 ## Staging (Railway)
 
+**Full step-by-step guide: [docs/DEPLOY.md](docs/DEPLOY.md)** — Supabase connection
+string, every Railway variable, and the two defaults that are unsafe if left unset.
+
 Railway detects Go and builds `./cmd/api`. It injects `PORT`; the server already
 reads it, so no Procfile is needed.
 
