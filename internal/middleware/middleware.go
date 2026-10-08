@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"slices"
 	"time"
 
@@ -21,6 +22,7 @@ const (
 	ctxRequestID ctxKey = "request_id"
 	ctxSubject   ctxKey = "subject"  // authenticated entity id
 	ctxAudience  ctxKey = "audience" // "customer" | "admin"
+	ctxRole      ctxKey = "role"     // admin role: super_admin | manager
 )
 
 // RequestID attaches a short random id to each request for log correlation.
@@ -78,12 +80,29 @@ func Logger(next http.Handler) http.Handler {
 	})
 }
 
+// isLocalhostOrigin reports whether an origin is a plain-HTTP loopback address
+// on any port — http://localhost:3001, http://127.0.0.1:3000 and so on.
+func isLocalhostOrigin(origin string) bool {
+	u, err := url.Parse(origin)
+	if err != nil || u.Scheme != "http" {
+		return false
+	}
+	host := u.Hostname()
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
+}
+
 // CORS allows the configured frontend origins and the usual verbs/headers.
-func CORS(allowed []string) func(http.Handler) http.Handler {
+//
+// In development any loopback origin is accepted regardless of port. Next dev
+// silently falls back to :3001 when :3000 is taken, and with a single hardcoded
+// origin that turns every API call into an opaque CORS failure — which looks
+// like a broken login rather than a port clash. Production still honours only
+// the explicit CORS_ORIGINS allowlist.
+func CORS(allowed []string, devMode bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			origin := r.Header.Get("Origin")
-			if origin != "" && slices.Contains(allowed, origin) {
+			if origin != "" && (slices.Contains(allowed, origin) || (devMode && isLocalhostOrigin(origin))) {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Set("Vary", "Origin")
 				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
@@ -115,4 +134,11 @@ func SubjectFrom(ctx context.Context) string {
 func AudienceFrom(ctx context.Context) string {
 	a, _ := ctx.Value(ctxAudience).(string)
 	return a
+}
+
+// RoleFrom returns the admin role ("super_admin"|"manager") of the caller, set
+// by RequireAdmin. Empty for non-admin audiences.
+func RoleFrom(ctx context.Context) string {
+	r, _ := ctx.Value(ctxRole).(string)
+	return r
 }

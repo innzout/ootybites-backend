@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/innzout/ootybites/internal/middleware"
@@ -128,7 +129,15 @@ func (h *Handlers) AdminOrderInvoice(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) AdminDashboardStats(w http.ResponseWriter, r *http.Request) {
-	st, err := h.adminOrders.Stats(r.Context())
+	// Date range (YYYY-MM-DD, inclusive). When neither is supplied, default to
+	// the current day so the dashboard opens on "today".
+	q := r.URL.Query()
+	from, to := q.Get("from"), q.Get("to")
+	if from == "" && to == "" {
+		today := time.Now().Format("2006-01-02")
+		from, to = today, today
+	}
+	st, err := h.adminOrders.Stats(r.Context(), from, to)
 	if err != nil {
 		response.Fail(w, http.StatusInternalServerError, response.CodeInternal, "Could not load stats")
 		return

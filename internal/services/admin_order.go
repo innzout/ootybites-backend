@@ -16,11 +16,11 @@ type OrderStateError struct{ Message string }
 
 func (e *OrderStateError) Error() string { return e.Message }
 
-// allowedTransitions encodes the order state machine (ARCHITECTURE §6):
-// placed → reached_dealer|cancelled, reached_dealer → delivered|cancelled,
-// delivered/cancelled are terminal.
+// allowedTransitions encodes the (simplified) order state machine:
+// placed → delivered|cancelled; delivered/cancelled are terminal.
+// (reached_dealer is retained in the enum for history but no longer used.)
 var allowedTransitions = map[models.OrderStatus]map[models.OrderStatus]bool{
-	models.StatusPlaced:        {models.StatusReachedDealer: true, models.StatusCancelled: true},
+	models.StatusPlaced:        {models.StatusDelivered: true, models.StatusCancelled: true},
 	models.StatusReachedDealer: {models.StatusDelivered: true, models.StatusCancelled: true},
 	models.StatusDelivered:     {},
 	models.StatusCancelled:     {},
@@ -128,11 +128,11 @@ func (s *AdminOrders) Get(ctx context.Context, id string) (*models.Order, error)
 	err := s.db.QueryRow(ctx,
 		`SELECT o.id, o.order_number, o.customer_id, o.status, o.subtotal, o.discount_amount, o.coupon_code, o.total,
 		        o.payment_method, o.ship_name, o.ship_phone, o.ship_line1, o.ship_line2, o.ship_city, o.ship_state, o.ship_pincode,
-		        o.placed_at, o.dealer_id, d.name
+		        o.placed_at, o.dealer_id, d.name, o.hub_id, o.is_express, o.delivery_note, o.ship_lat, o.ship_lng
 		 FROM orders o LEFT JOIN dealers d ON d.id = o.dealer_id WHERE o.id=$1`, id).
 		Scan(&o.ID, &o.OrderNumber, &o.CustomerID, &o.Status, &o.Subtotal, &o.DiscountAmount, &o.CouponCode, &o.Total,
 			&o.PaymentMethod, &o.ShipName, &o.ShipPhone, &o.ShipLine1, &o.ShipLine2, &o.ShipCity, &o.ShipState, &o.ShipPincode,
-			&o.PlacedAt, &o.DealerID, &o.DealerName)
+			&o.PlacedAt, &o.DealerID, &o.DealerName, &o.HubID, &o.IsExpress, &o.DeliveryNote, &o.ShipLat, &o.ShipLng)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -198,14 +198,16 @@ func (s *AdminOrders) UpdateStatus(ctx context.Context, adminID, id string, next
 		return nil, &OrderStateError{Message: "A reason is required to cancel an order"}
 	}
 
-	// Cancel restores stock for each line's variant (if still present).
+	// Cancel restores stock to wherever it was taken from (the fulfilling hub for
+	// an express order, else central variant stock) and logs a matching
+	// 'cancel_restore' movement to the inventory ledger.
 	if next == models.StatusCancelled {
-		if _, err := tx.Exec(ctx,
-			`UPDATE product_variants v
-			 SET stock_qty = stock_qty + oi.qty
-			 FROM order_items oi
-			 WHERE oi.order_id = $1 AND oi.variant_id = v.id`, id); err != nil {
-			return nil, fmt.Errorf("restore stock: %w", err)
+		if err := restoreOrderStock(ctx, tx, id); err != nil {
+			return nil, err
+		}
+		// Free the coupon (redemption + usage budget) when an order is cancelled.
+		if err := releaseOrderCoupon(ctx, tx, id); err != nil {
+			return nil, err
 		}
 	}
 
@@ -221,6 +223,19 @@ func (s *AdminOrders) UpdateStatus(ctx context.Context, adminID, id string, next
 		id, next, nullUUID(adminID), notePtr); err != nil {
 		return nil, fmt.Errorf("log history: %w", err)
 	}
+
+	// Notify the customer of the outcome (best-effort).
+	if next == models.StatusDelivered || next == models.StatusCancelled {
+		var custID, orderNo string
+		if err := tx.QueryRow(ctx, `SELECT customer_id, order_number FROM orders WHERE id=$1`, id).Scan(&custID, &orderNo); err == nil {
+			title, body := "Order delivered ✅", fmt.Sprintf("Your order %s has been delivered.", orderNo)
+			if next == models.StatusCancelled {
+				title, body = "Order cancelled", fmt.Sprintf("Your order %s was cancelled.", orderNo)
+			}
+			insertNotification(ctx, tx, &custID, false, title, &body, &id)
+		}
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
@@ -245,10 +260,13 @@ func (s *AdminOrders) UpdateAddress(ctx context.Context, adminID, id string, shi
 	if current != models.StatusPlaced && current != models.StatusReachedDealer {
 		return nil, &OrderStateError{Message: "Address can only be changed before delivery"}
 	}
+	// ship_lat/ship_lng are updated too: a manual edit with no pin sends NULL,
+	// which clears the old pin so the map never points at a stale location.
 	if _, err := tx.Exec(ctx,
 		`UPDATE orders SET ship_name=$2, ship_phone=$3, ship_line1=$4, ship_line2=$5,
-		   ship_city=$6, ship_state=$7, ship_pincode=$8 WHERE id=$1`,
-		id, ship.Name, ship.Phone, ship.Line1, ship.Line2, ship.City, ship.State, ship.Pincode); err != nil {
+		   ship_city=$6, ship_state=$7, ship_pincode=$8, ship_lat=$9, ship_lng=$10 WHERE id=$1`,
+		id, ship.Name, ship.Phone, ship.Line1, ship.Line2, ship.City, ship.State, ship.Pincode,
+		ship.Lat, ship.Lng); err != nil {
 		return nil, fmt.Errorf("update address: %w", err)
 	}
 	note := "Shipping address updated"
@@ -265,22 +283,49 @@ func (s *AdminOrders) UpdateAddress(ctx context.Context, adminID, id string, shi
 
 // AssignDealer assigns (or clears, when dealerID is nil) the fulfilling dealer.
 func (s *AdminOrders) AssignDealer(ctx context.Context, orderID string, dealerID *string, adminID string) (*models.Order, error) {
-	tag, err := s.db.Exec(ctx, `UPDATE orders SET dealer_id=$2 WHERE id=$1`, orderID, dealerID)
+	// Transactional, like every other order mutation: the assignment and its
+	// audit row must land together. Previously these were three loose statements
+	// whose history INSERT errors were discarded, so an order could change hands
+	// with no trace of who did it — and CLAUDE.md requires every transition to be
+	// logged to order_status_history.
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	// Lock the row so a concurrent status change can't interleave between the
+	// status read and the history write.
+	var current models.OrderStatus
+	err = tx.QueryRow(ctx, `SELECT status FROM orders WHERE id=$1 FOR UPDATE`, orderID).Scan(&current)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
 	if err != nil {
 		return nil, fmt.Errorf("assign dealer: %w", err)
 	}
-	if tag.RowsAffected() == 0 {
-		return nil, ErrNotFound
+	// A finished order has nobody left to deliver it; reassigning it would only
+	// corrupt the dealer's worklist.
+	if current == models.StatusDelivered || current == models.StatusCancelled {
+		return nil, &OrderStateError{Message: fmt.Sprintf("Cannot reassign a %s order", current)}
 	}
+
+	if _, err := tx.Exec(ctx, `UPDATE orders SET dealer_id=$2 WHERE id=$1`, orderID, dealerID); err != nil {
+		return nil, fmt.Errorf("assign dealer: %w", err)
+	}
+
 	note := "Unassigned from dealer"
 	if dealerID != nil {
 		note = "Assigned to dealer"
 	}
-	var current models.OrderStatus
-	if err := s.db.QueryRow(ctx, `SELECT status FROM orders WHERE id=$1`, orderID).Scan(&current); err == nil {
-		_, _ = s.db.Exec(ctx,
-			`INSERT INTO order_status_history (order_id, status, changed_by, note) VALUES ($1,$2,$3,$4)`,
-			orderID, current, adminID, &note)
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO order_status_history (order_id, status, changed_by, note) VALUES ($1,$2,$3,$4)`,
+		orderID, current, adminID, &note); err != nil {
+		return nil, fmt.Errorf("assign dealer history: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("assign dealer commit: %w", err)
 	}
 	return s.Get(ctx, orderID)
 }
@@ -363,21 +408,53 @@ type DashboardStats struct {
 	Revenue        float64        `json:"revenue"` // delivered only
 	CountsByStatus map[string]int `json:"counts_by_status"`
 	RecentOrders   []models.Order `json:"recent_orders"`
+	From           string         `json:"from"` // applied range (YYYY-MM-DD), empty = all time
+	To             string         `json:"to"`
 }
 
-// Stats computes the dashboard figures. Revenue counts delivered orders only;
-// cancelled orders are excluded from revenue (ARCHITECTURE §6).
-func (s *AdminOrders) Stats(ctx context.Context) (*DashboardStats, error) {
-	st := &DashboardStats{CountsByStatus: map[string]int{}}
+// dateRangePredicate builds an inclusive `placed_at` date filter for the dashboard
+// queries. from/to are YYYY-MM-DD; either may be empty (open-ended). It returns a
+// SQL fragment (already prefixed with " AND " when non-empty) plus its args, so
+// callers append it after an existing WHERE. $1 begins at startIdx.
+func dateRangePredicate(from, to string, startIdx int) (string, []any) {
+	var sb strings.Builder
+	args := []any{}
+	i := startIdx
+	if from != "" {
+		fmt.Fprintf(&sb, " AND placed_at >= $%d::date", i)
+		args = append(args, from)
+		i++
+	}
+	if to != "" {
+		// Inclusive of the whole `to` day.
+		fmt.Fprintf(&sb, " AND placed_at < ($%d::date + 1)", i)
+		args = append(args, to)
+	}
+	return sb.String(), args
+}
 
-	if err := s.db.QueryRow(ctx, `SELECT count(*) FROM orders`).Scan(&st.TotalOrders); err != nil {
-		return nil, err
-	}
+// Stats computes the dashboard figures within an optional inclusive date range
+// (from/to as YYYY-MM-DD; empty = all time). Revenue counts delivered orders
+// only; cancelled orders are excluded from revenue (ARCHITECTURE §6).
+func (s *AdminOrders) Stats(ctx context.Context, from, to string) (*DashboardStats, error) {
+	st := &DashboardStats{CountsByStatus: map[string]int{}, From: from, To: to}
+
+	// total orders in range
+	rangeSQL, rangeArgs := dateRangePredicate(from, to, 1)
 	if err := s.db.QueryRow(ctx,
-		`SELECT coalesce(sum(total),0) FROM orders WHERE status='delivered'`).Scan(&st.Revenue); err != nil {
+		`SELECT count(*) FROM orders WHERE true`+rangeSQL, rangeArgs...).Scan(&st.TotalOrders); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.Query(ctx, `SELECT status, count(*) FROM orders GROUP BY status`)
+	// revenue (delivered) in range
+	revSQL, revArgs := dateRangePredicate(from, to, 1)
+	if err := s.db.QueryRow(ctx,
+		`SELECT coalesce(sum(total),0) FROM orders WHERE status='delivered'`+revSQL, revArgs...).Scan(&st.Revenue); err != nil {
+		return nil, err
+	}
+	// counts by status in range
+	cntSQL, cntArgs := dateRangePredicate(from, to, 1)
+	rows, err := s.db.Query(ctx,
+		`SELECT status, count(*) FROM orders WHERE true`+cntSQL+` GROUP BY status`, cntArgs...)
 	if err != nil {
 		return nil, err
 	}
@@ -392,7 +469,7 @@ func (s *AdminOrders) Stats(ctx context.Context) (*DashboardStats, error) {
 	}
 	rows.Close()
 
-	recent, _, err := s.List(ctx, OrderFilter{Sort: "placed_at", Order: "desc", Page: 1, Limit: 5})
+	recent, _, err := s.List(ctx, OrderFilter{Sort: "placed_at", Order: "desc", Page: 1, Limit: 5, From: from, To: to})
 	if err != nil {
 		return nil, err
 	}

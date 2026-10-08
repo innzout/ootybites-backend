@@ -15,8 +15,19 @@ type areaBody struct {
 	Name     string  `json:"name"`
 	City     string  `json:"city"`
 	Pincode  string  `json:"pincode"`
-	DealerID *string `json:"dealer_id"`
+	HubID    *string `json:"hub_id"`
 	IsActive *bool   `json:"is_active"`
+}
+
+// ListCities (public) returns the serviceable cities for the storefront's
+// delivery-address city picker, derived from active areas.
+func (h *Handlers) ListCities(w http.ResponseWriter, r *http.Request) {
+	cities, err := h.areas.Cities(r.Context())
+	if err != nil {
+		response.Fail(w, http.StatusInternalServerError, response.CodeInternal, "Could not load cities")
+		return
+	}
+	response.OK(w, map[string]any{"cities": cities})
 }
 
 func (b areaBody) validate() map[string]string {
@@ -37,7 +48,7 @@ func (b areaBody) toInput() services.AreaInput {
 		Name:     b.Name,
 		City:     city,
 		Pincode:  b.Pincode,
-		DealerID: b.DealerID,
+		HubID:    b.HubID,
 		IsActive: deref(b.IsActive, true),
 	}
 }
@@ -49,6 +60,19 @@ func (h *Handlers) AdminListAreas(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response.OK(w, map[string]any{"areas": areas})
+}
+
+func (h *Handlers) AdminGetArea(w http.ResponseWriter, r *http.Request) {
+	a, err := h.areas.Get(r.Context(), chi.URLParam(r, "id"))
+	if errors.Is(err, services.ErrNotFound) {
+		response.Fail(w, http.StatusNotFound, response.CodeNotFound, "Area not found")
+		return
+	}
+	if err != nil {
+		response.Fail(w, http.StatusInternalServerError, response.CodeInternal, "Could not load area")
+		return
+	}
+	response.OK(w, a)
 }
 
 func (h *Handlers) AdminCreateArea(w http.ResponseWriter, r *http.Request) {

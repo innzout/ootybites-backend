@@ -5,7 +5,6 @@ package main
 import (
 	"context"
 	"errors"
-	"log"
 	"log/slog"
 	"net/http"
 	"os"
@@ -22,12 +21,23 @@ import (
 	migrations "github.com/innzout/ootybites/migrations"
 )
 
+// fatal logs a startup failure at ERROR and exits non-zero.
+//
+// It exists because slog.SetDefault also redirects the stdlib log package into
+// the slog handler at INFO — so log.Fatalf emitted fatal errors as
+// {"level":"INFO"}, making a server that failed to boot invisible to any
+// error-level alerting or log filter in production.
+func fatal(msg string, err error) {
+	slog.Error(msg, "error", err)
+	os.Exit(1)
+}
+
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("config: %v", err)
+		fatal("config load failed", err)
 	}
 	slog.Info("config loaded", "env", cfg.Env)
 
@@ -35,19 +45,19 @@ func main() {
 
 	pool, err := db.New(ctx, cfg.DatabaseURL)
 	if err != nil {
-		log.Fatalf("database: %v", err)
+		fatal("database connection failed", err)
 	}
 	defer pool.Close()
 	slog.Info("connected to Postgres")
 
 	if err := migrate.Run(ctx, pool, migrations.Files); err != nil {
-		log.Fatalf("migrate: %v", err)
+		fatal("migrations failed", err)
 	}
 	slog.Info("migrations up to date")
 
 	rc, err := redis.New(ctx, cfg.RedisURL)
 	if err != nil {
-		log.Fatalf("redis: %v", err)
+		fatal("redis connection failed", err)
 	}
 
 	// Rate limiter: Redis-backed when configured, otherwise in-memory (local dev).
@@ -65,7 +75,7 @@ func main() {
 
 	// Ensure the bootstrap admin exists so the admin panel is reachable.
 	if err := h.Auth().SeedAdmin(ctx, cfg.AdminUser, cfg.AdminPass); err != nil {
-		log.Fatalf("seed admin: %v", err)
+		fatal("seed admin failed", err)
 	}
 	slog.Info("admin seeded", "username", cfg.AdminUser)
 
@@ -78,17 +88,37 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 	}
 
-	// Serve in the background; block on a shutdown signal.
+	// Serve in the background. A serve failure (most commonly the port already
+	// being held) is reported back to main rather than exiting from inside the
+	// goroutine — os.Exit there would skip every defer above, leaking the
+	// Postgres pool and the Redis client on a failed boot.
+	serveErr := make(chan error, 1)
 	go func() {
 		slog.Info("listening", "addr", srv.Addr)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("server: %v", err)
+			serveErr <- err
+			return
 		}
+		serveErr <- nil
 	}()
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
-	<-stop
+
+	select {
+	case err := <-serveErr:
+		if err != nil {
+			// os.Exit skips defers, so close explicitly here.
+			slog.Error("server stopped unexpectedly", "error", err)
+			pool.Close()
+			if rc != nil {
+				rc.Close()
+			}
+			os.Exit(1)
+		}
+		return
+	case <-stop:
+	}
 	slog.Info("shutting down")
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

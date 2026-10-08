@@ -15,11 +15,17 @@ import (
 
 // ListProducts returns a paginated, optionally-searched page of active products.
 func (h *Handlers) ListProducts(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query().Get("q")
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	q := r.URL.Query()
+	page, _ := strconv.Atoi(q.Get("page"))
+	limit, _ := strconv.Atoi(q.Get("limit"))
 
-	products, total, err := h.catalog.ListProducts(r.Context(), q, page, limit)
+	products, total, err := h.catalog.ListProducts(r.Context(), services.StorefrontQuery{
+		Q:          q.Get("q"),
+		CategoryID: q.Get("category"),
+		Sort:       q.Get("sort"),
+		Page:       page,
+		Limit:      limit,
+	})
 	if err != nil {
 		response.Fail(w, http.StatusInternalServerError, response.CodeInternal, "Could not load products")
 		return
@@ -45,12 +51,23 @@ func (h *Handlers) GetProduct(w http.ResponseWriter, r *http.Request) {
 // ---------------- Admin catalog ----------------
 
 func (h *Handlers) AdminListProducts(w http.ResponseWriter, r *http.Request) {
-	products, err := h.catalog.AdminListProducts(r.Context())
+	q := r.URL.Query()
+	page, _ := strconv.Atoi(q.Get("page"))
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	products, total, err := h.catalog.AdminListProducts(r.Context(), services.AdminProductQuery{
+		Q:      q.Get("q"),
+		Active: q.Get("active"),
+		Stock:  q.Get("stock"),
+		Page:   page,
+		Limit:  limit,
+		Sort:   q.Get("sort"),
+		Order:  q.Get("order"),
+	})
 	if err != nil {
 		response.Fail(w, http.StatusInternalServerError, response.CodeInternal, "Could not load products")
 		return
 	}
-	response.OK(w, map[string]any{"products": products})
+	response.OK(w, map[string]any{"products": products, "total": total})
 }
 
 func (h *Handlers) AdminGetProduct(w http.ResponseWriter, r *http.Request) {
@@ -71,6 +88,7 @@ type productBody struct {
 	Slug        string  `json:"slug"`
 	Description *string `json:"description"`
 	IsActive    *bool   `json:"is_active"`
+	CategoryID  *string `json:"category_id"`
 }
 
 func (b productBody) validate() map[string]string {
@@ -89,7 +107,7 @@ func (h *Handlers) AdminCreateProduct(w http.ResponseWriter, r *http.Request) {
 		response.FailFields(w, fields)
 		return
 	}
-	p, err := h.catalog.CreateProduct(r.Context(), b.Name, b.Slug, b.Description, deref(b.IsActive, true))
+	p, err := h.catalog.CreateProduct(r.Context(), b.Name, b.Slug, b.Description, deref(b.IsActive, true), trimPtr(b.CategoryID))
 	if err != nil {
 		response.Fail(w, http.StatusConflict, response.CodeConflict, "Could not create product (slug may already exist)")
 		return
@@ -106,7 +124,7 @@ func (h *Handlers) AdminUpdateProduct(w http.ResponseWriter, r *http.Request) {
 		response.FailFields(w, fields)
 		return
 	}
-	p, err := h.catalog.UpdateProduct(r.Context(), chi.URLParam(r, "id"), b.Name, b.Slug, b.Description, deref(b.IsActive, true))
+	p, err := h.catalog.UpdateProduct(r.Context(), chi.URLParam(r, "id"), b.Name, b.Slug, b.Description, deref(b.IsActive, true), trimPtr(b.CategoryID))
 	if errors.Is(err, services.ErrNotFound) {
 		response.Fail(w, http.StatusNotFound, response.CodeNotFound, "Product not found")
 		return

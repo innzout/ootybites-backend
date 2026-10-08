@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 
 	"github.com/innzout/ootybites/pkg/response"
@@ -18,4 +19,18 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 		return false
 	}
 	return true
+}
+
+// decodeJSONOptional decodes a JSON body when present but tolerates an empty or
+// absent body (leaving dst at its zero value). For endpoints where the body is
+// optional (e.g. an optional cancel reason).
+func decodeJSONOptional(r *http.Request, dst any) error {
+	if r.Body == nil {
+		return nil
+	}
+	defer r.Body.Close()
+	if err := json.NewDecoder(r.Body).Decode(dst); err != nil && err != io.EOF {
+		return err
+	}
+	return nil
 }

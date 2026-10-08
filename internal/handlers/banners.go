@@ -60,6 +60,19 @@ func (b bannerBody) toInput() services.BannerInput {
 	}
 }
 
+func (h *Handlers) AdminGetBanner(w http.ResponseWriter, r *http.Request) {
+	b, err := h.banners.Get(r.Context(), chi.URLParam(r, "id"))
+	if errors.Is(err, services.ErrNotFound) {
+		response.Fail(w, http.StatusNotFound, response.CodeNotFound, "Banner not found")
+		return
+	}
+	if err != nil {
+		response.Fail(w, http.StatusInternalServerError, response.CodeInternal, "Could not load banner")
+		return
+	}
+	response.OK(w, b)
+}
+
 func (h *Handlers) AdminCreateBanner(w http.ResponseWriter, r *http.Request) {
 	var b bannerBody
 	if !decodeJSON(w, r, &b) {

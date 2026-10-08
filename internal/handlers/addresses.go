@@ -12,14 +12,16 @@ import (
 )
 
 type addressBody struct {
-	Name      string  `json:"name"`
-	Phone     string  `json:"phone"`
-	Line1     string  `json:"line1"`
-	Line2     *string `json:"line2"`
-	City      string  `json:"city"`
-	State     string  `json:"state"`
-	Pincode   string  `json:"pincode"`
-	IsDefault bool    `json:"is_default"`
+	Name      string   `json:"name"`
+	Phone     string   `json:"phone"`
+	Line1     string   `json:"line1"`
+	Line2     *string  `json:"line2"`
+	City      string   `json:"city"`
+	State     string   `json:"state"`
+	Pincode   string   `json:"pincode"`
+	Lat       *float64 `json:"lat"`
+	Lng       *float64 `json:"lng"`
+	IsDefault bool     `json:"is_default"`
 }
 
 func (b addressBody) validate() map[string]string {
@@ -36,7 +38,7 @@ func (b addressBody) validate() map[string]string {
 func (b addressBody) toInput() services.AddressInput {
 	return services.AddressInput{
 		Name: b.Name, Phone: b.Phone, Line1: b.Line1, Line2: trimPtr(b.Line2),
-		City: b.City, State: b.State, Pincode: b.Pincode, IsDefault: b.IsDefault,
+		City: b.City, State: b.State, Pincode: b.Pincode, Lat: b.Lat, Lng: b.Lng, IsDefault: b.IsDefault,
 	}
 }
 

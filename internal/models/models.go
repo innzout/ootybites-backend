@@ -36,6 +36,8 @@ type Address struct {
 	City       string    `json:"city"`
 	State      string    `json:"state"`
 	Pincode    string    `json:"pincode"`
+	Lat        *float64  `json:"lat"`
+	Lng        *float64  `json:"lng"`
 	IsDefault  bool      `json:"is_default"`
 	CreatedAt  time.Time `json:"created_at"`
 }
@@ -47,9 +49,20 @@ type Product struct {
 	Slug        string         `json:"slug"`
 	Description *string        `json:"description"`
 	IsActive    bool           `json:"is_active"`
+	CategoryID  *string        `json:"category_id"`
 	Images      []ProductImage `json:"images"`
 	Variants    []Variant      `json:"variants"`
 	CreatedAt   time.Time      `json:"created_at"`
+}
+
+// Category groups products for storefront browsing.
+type Category struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Slug      string    `json:"slug"`
+	SortOrder int       `json:"sort_order"`
+	IsActive  bool      `json:"is_active"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // ProductImage is one Cloudinary-hosted image for a product.
@@ -113,24 +126,89 @@ type Order struct {
 	ShipCity       string               `json:"ship_city"`
 	ShipState      string               `json:"ship_state"`
 	ShipPincode    string               `json:"ship_pincode"`
+	ShipLat        *float64             `json:"ship_lat"`
+	ShipLng        *float64             `json:"ship_lng"`
 	PlacedAt       time.Time            `json:"placed_at"`
 	DealerID       *string              `json:"dealer_id"`
 	DealerName     *string              `json:"dealer_name"`
+	HubID          *string              `json:"hub_id"`
+	IsExpress      bool                 `json:"is_express"`
+	DeliveryNote   *string              `json:"delivery_note"`
 	Items          []OrderItem          `json:"items,omitempty"`
 	History        []OrderStatusHistory `json:"history,omitempty"`
 }
 
-// Area maps a delivery pincode (in a city) to a fulfilling dealer.
-type Area struct {
+// Vendor is a supplier in Ooty we buy stock from.
+type Vendor struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Phone     *string   `json:"phone"`
+	Location  string    `json:"location"`
+	Notes     *string   `json:"notes"`
+	IsActive  bool      `json:"is_active"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// StockMovement is one row of the inventory ledger for a variant.
+type StockMovement struct {
 	ID         string    `json:"id"`
-	Code       string    `json:"code"`
+	VariantID  string    `json:"variant_id"`
+	Delta      int       `json:"delta"`
+	Reason     string    `json:"reason"`
+	VendorID   *string   `json:"vendor_id"`
+	VendorName *string   `json:"vendor_name"`
+	OrderID    *string   `json:"order_id"`
+	OrderNo    *string   `json:"order_number"`
+	UnitCost   *float64  `json:"unit_cost"`
+	Note       *string   `json:"note"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+// StockRow is a variant's current-stock summary for the inventory overview.
+type StockRow struct {
+	VariantID    string  `json:"variant_id"`
+	ProductID    string  `json:"product_id"`
+	ProductName  string  `json:"product_name"`
+	VariantLabel string  `json:"variant_label"`
+	SKU          *string `json:"sku"`
+	StockQty     int     `json:"stock_qty"`
+	Price        float64 `json:"price"`
+	IsActive     bool    `json:"is_active"`
+}
+
+// Notification is an in-app alert for a customer or the admin feed.
+type Notification struct {
+	ID        string    `json:"id"`
+	Title     string    `json:"title"`
+	Body      *string   `json:"body"`
+	OrderID   *string   `json:"order_id"`
+	IsRead    bool      `json:"is_read"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// Hub is a fulfilment centre run by a dealer; it serves many areas and holds
+// its own stock for 24-hour (express) delivery.
+type Hub struct {
+	ID         string    `json:"id"`
 	Name       string    `json:"name"`
-	City       string    `json:"city"`
-	Pincode    string    `json:"pincode"`
 	DealerID   *string   `json:"dealer_id"`
 	DealerName *string   `json:"dealer_name"`
 	IsActive   bool      `json:"is_active"`
+	AreaCount  int       `json:"area_count"`
 	CreatedAt  time.Time `json:"created_at"`
+}
+
+// Area maps a delivery pincode (in a city) to a fulfilment hub (exclusive).
+type Area struct {
+	ID        string    `json:"id"`
+	Code      string    `json:"code"`
+	Name      string    `json:"name"`
+	City      string    `json:"city"`
+	Pincode   string    `json:"pincode"`
+	HubID     *string   `json:"hub_id"`
+	HubName   *string   `json:"hub_name"`
+	IsActive  bool      `json:"is_active"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // Dealer is a local partner who fulfils orders assigned to them.
@@ -141,6 +219,43 @@ type Dealer struct {
 	Address   *string   `json:"address"`
 	Username  string    `json:"username"`
 	IsActive  bool      `json:"is_active"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// Page is an editable CMS content page (Terms, Privacy, etc.). Body is
+// lightweight markdown rendered safely on the client.
+type Page struct {
+	ID          string    `json:"id"`
+	Slug        string    `json:"slug"`
+	Title       string    `json:"title"`
+	Body        string    `json:"body"`
+	IsPublished bool      `json:"is_published"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// Settings is the single-row store configuration (admin-editable). All fields
+// are safe to expose to the storefront.
+type Settings struct {
+	StoreName            string    `json:"store_name"`
+	Tagline              string    `json:"tagline"`
+	SupportEmail         string    `json:"support_email"`
+	SupportPhone         string    `json:"support_phone"`
+	StoreAddress         string    `json:"store_address"`
+	StandardDeliveryText string    `json:"standard_delivery_text"`
+	ExpressDeliveryText  string    `json:"express_delivery_text"`
+	CODNote              string    `json:"cod_note"`
+	OrderNumberPrefix    string    `json:"order_number_prefix"`
+	UpdatedAt            time.Time `json:"updated_at"`
+}
+
+// Admin is a back-office user. Role gates admin-user management:
+// super_admin can manage other admins; manager cannot.
+type Admin struct {
+	ID        string    `json:"id"`
+	Username  string    `json:"username"`
+	Name      *string   `json:"name"`
+	Role      string    `json:"role"` // super_admin | manager
 	CreatedAt time.Time `json:"created_at"`
 }
 

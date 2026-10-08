@@ -25,11 +25,12 @@ const (
 	DealerTTL   = 12 * time.Hour
 )
 
-// Claims is our JWT payload. `Name`/`Phone` are set for customers, `Username`
+// Claims is our JWT payload. `Phone` is set for customers, `Username`/`Role`
 // for admins; `Subject` (from RegisteredClaims) always carries the entity id.
 type Claims struct {
 	Username string `json:"username,omitempty"`
 	Phone    string `json:"phone,omitempty"`
+	Role     string `json:"role,omitempty"` // admin role: super_admin | manager
 	jwt.RegisteredClaims
 }
 
@@ -43,9 +44,10 @@ func IssueCustomer(secret, customerID, phone string) (string, error) {
 	return issue(secret, AudienceCustomer, customerID, CustomerTTL, Claims{Phone: phone})
 }
 
-// IssueAdmin mints an admin-audience token for the given admin id.
-func IssueAdmin(secret, adminID, username string) (string, error) {
-	return issue(secret, AudienceAdmin, adminID, AdminTTL, Claims{Username: username})
+// IssueAdmin mints an admin-audience token for the given admin id, carrying the
+// admin's role so route middleware can enforce role-based access.
+func IssueAdmin(secret, adminID, username, role string) (string, error) {
+	return issue(secret, AudienceAdmin, adminID, AdminTTL, Claims{Username: username, Role: role})
 }
 
 // IssueDealer mints a dealer-audience token for the given dealer id.

@@ -276,6 +276,11 @@ func (s *Coupons) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
+// Get returns one coupon by id (ErrNotFound if absent).
+func (s *Coupons) Get(ctx context.Context, id string) (*models.Coupon, error) {
+	return s.getByID(ctx, id)
+}
+
 func (s *Coupons) getByID(ctx context.Context, id string) (*models.Coupon, error) {
 	var c models.Coupon
 	err := s.db.QueryRow(ctx,

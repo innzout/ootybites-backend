@@ -86,9 +86,10 @@ func (h *Handlers) ValidateCoupon(w http.ResponseWriter, r *http.Request) {
 // --- Orders ---
 
 type placeOrderBody struct {
-	Items    []services.CartItemInput `json:"items"`
-	Code     string                   `json:"coupon_code"`
-	Shipping services.ShippingInput   `json:"shipping"`
+	Items        []services.CartItemInput `json:"items"`
+	Code         string                   `json:"coupon_code"`
+	Shipping     services.ShippingInput   `json:"shipping"`
+	DeliveryNote string                   `json:"delivery_note"`
 }
 
 // PlaceOrder validates the cart server-side, recomputes money, and places a COD
@@ -111,7 +112,7 @@ func (h *Handlers) PlaceOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	order, err := h.orders.PlaceOrder(r.Context(), middleware.SubjectFrom(r.Context()), b.Items, b.Code, s)
+	order, err := h.orders.PlaceOrder(r.Context(), middleware.SubjectFrom(r.Context()), b.Items, b.Code, s, b.DeliveryNote)
 	var cartErr *services.CartError
 	switch {
 	case errors.Is(err, services.ErrSessionInvalid):
@@ -149,4 +150,40 @@ func (h *Handlers) GetOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response.OK(w, o)
+}
+
+// Reorder returns the still-available lines of a past order for "buy again".
+func (h *Handlers) Reorder(w http.ResponseWriter, r *http.Request) {
+	lines, err := h.orders.Reorder(r.Context(), middleware.SubjectFrom(r.Context()), chi.URLParam(r, "id"))
+	if errors.Is(err, services.ErrNotFound) {
+		response.Fail(w, http.StatusNotFound, response.CodeNotFound, "Order not found")
+		return
+	}
+	if err != nil {
+		response.Fail(w, http.StatusInternalServerError, response.CodeInternal, "Could not load order")
+		return
+	}
+	response.OK(w, map[string]any{"items": lines})
+}
+
+type cancelBody struct {
+	Reason string `json:"reason"`
+}
+
+// CancelOrder lets the customer cancel their own order while it is still 'placed'.
+func (h *Handlers) CancelOrder(w http.ResponseWriter, r *http.Request) {
+	var b cancelBody
+	_ = decodeJSONOptional(r, &b) // reason is optional
+	o, err := h.orders.Cancel(r.Context(), middleware.SubjectFrom(r.Context()), chi.URLParam(r, "id"), b.Reason)
+	var cartErr *services.CartError
+	switch {
+	case errors.Is(err, services.ErrNotFound):
+		response.Fail(w, http.StatusNotFound, response.CodeNotFound, "Order not found")
+	case errors.As(err, &cartErr):
+		response.Fail(w, http.StatusConflict, response.CodeConflict, cartErr.Message)
+	case err != nil:
+		response.Fail(w, http.StatusInternalServerError, response.CodeInternal, "Could not cancel order")
+	default:
+		response.OK(w, o)
+	}
 }

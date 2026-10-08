@@ -94,6 +94,11 @@ func (s *Banners) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
+// Get returns one banner by id (ErrNotFound if absent).
+func (s *Banners) Get(ctx context.Context, id string) (*models.Banner, error) {
+	return s.getByID(ctx, id)
+}
+
 func (s *Banners) getByID(ctx context.Context, id string) (*models.Banner, error) {
 	var b models.Banner
 	err := s.db.QueryRow(ctx,

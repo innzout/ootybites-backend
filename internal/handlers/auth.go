@@ -31,6 +31,14 @@ func (h *Handlers) OTPRequest(w http.ResponseWriter, r *http.Request) {
 
 	devCode, err := h.auth.RequestOTP(r.Context(), body.Phone)
 	if err != nil {
+		// A misconfigured/unreachable SMS provider is a 503, not a 500: it is a
+		// transient dependency failure and the customer should be told to retry
+		// rather than shown a generic crash.
+		if errors.Is(err, services.ErrSMSNotConfigured) {
+			response.Fail(w, http.StatusServiceUnavailable, response.CodeInternal,
+				"SMS service is unavailable right now. Please try again shortly.")
+			return
+		}
 		response.Fail(w, http.StatusInternalServerError, response.CodeInternal, "Could not send code")
 		return
 	}
@@ -62,6 +70,11 @@ func (h *Handlers) OTPVerify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tok, cust, err := h.auth.VerifyOTP(r.Context(), body.Phone, body.OTP)
+	if errors.Is(err, services.ErrOTPAttemptsExceeded) {
+		response.Fail(w, http.StatusUnauthorized, response.CodeUnauthorized,
+			"Too many incorrect attempts. Please request a new code.")
+		return
+	}
 	if errors.Is(err, services.ErrInvalidOTP) {
 		response.Fail(w, http.StatusUnauthorized, response.CodeUnauthorized, "Invalid or expired code")
 		return

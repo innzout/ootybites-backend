@@ -56,6 +56,19 @@ func (h *Handlers) AdminListDealers(w http.ResponseWriter, r *http.Request) {
 	response.OK(w, map[string]any{"dealers": dealers})
 }
 
+func (h *Handlers) AdminGetDealer(w http.ResponseWriter, r *http.Request) {
+	d, err := h.dealers.Get(r.Context(), chi.URLParam(r, "id"))
+	if errors.Is(err, services.ErrNotFound) {
+		response.Fail(w, http.StatusNotFound, response.CodeNotFound, "Dealer not found")
+		return
+	}
+	if err != nil {
+		response.Fail(w, http.StatusInternalServerError, response.CodeInternal, "Could not load dealer")
+		return
+	}
+	response.OK(w, d)
+}
+
 func (h *Handlers) AdminCreateDealer(w http.ResponseWriter, r *http.Request) {
 	var b dealerBody
 	if !decodeJSON(w, r, &b) {

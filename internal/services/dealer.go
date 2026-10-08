@@ -127,6 +127,18 @@ func (s *Dealers) Authenticate(ctx context.Context, username, plain string) (*mo
 	return s.getByID(ctx, id)
 }
 
+// Exists reports whether a dealer id is still present (for the auth middleware).
+func (s *Dealers) Exists(ctx context.Context, id string) (bool, error) {
+	var ok bool
+	err := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM dealers WHERE id=$1)`, id).Scan(&ok)
+	return ok, err
+}
+
+// Get returns one dealer by id (ErrNotFound if absent).
+func (s *Dealers) Get(ctx context.Context, id string) (*models.Dealer, error) {
+	return s.getByID(ctx, id)
+}
+
 func (s *Dealers) getByID(ctx context.Context, id string) (*models.Dealer, error) {
 	var d models.Dealer
 	err := s.db.QueryRow(ctx,

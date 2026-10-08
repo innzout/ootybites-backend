@@ -58,6 +58,19 @@ func (h *Handlers) AdminListCoupons(w http.ResponseWriter, r *http.Request) {
 	response.OK(w, map[string]any{"coupons": coupons})
 }
 
+func (h *Handlers) AdminGetCoupon(w http.ResponseWriter, r *http.Request) {
+	c, err := h.coupons.Get(r.Context(), chi.URLParam(r, "id"))
+	if errors.Is(err, services.ErrNotFound) {
+		response.Fail(w, http.StatusNotFound, response.CodeNotFound, "Coupon not found")
+		return
+	}
+	if err != nil {
+		response.Fail(w, http.StatusInternalServerError, response.CodeInternal, "Could not load coupon")
+		return
+	}
+	response.OK(w, c)
+}
+
 func (h *Handlers) AdminCreateCoupon(w http.ResponseWriter, r *http.Request) {
 	var b couponBody
 	if !decodeJSON(w, r, &b) {
