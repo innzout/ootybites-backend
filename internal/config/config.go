@@ -85,7 +85,17 @@ func Load() (*Config, error) {
 }
 
 // IsProd reports whether the app is running in production mode.
+// APP_ENV is one of: development | staging | production.
+//
+// Only "development" relaxes anything. staging and production behave
+// identically for security — strict CORS, no loopback exemption — because a
+// staging box is reachable from the internet and should not be more permissive
+// than the real thing. What differs between them is configuration (dev OTP,
+// test data), not code.
 func (c *Config) IsProd() bool { return c.Env == "production" }
+
+// IsDev reports the one environment that gets relaxed behaviour.
+func (c *Config) IsDev() bool { return c.Env == "development" }
 
 func get(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {

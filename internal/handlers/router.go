@@ -18,7 +18,7 @@ func (h *Handlers) Router() http.Handler {
 	r.Use(middleware.Recover)
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Logger)
-	r.Use(middleware.CORS(h.cfg.CORSOrigins, h.cfg.Env == "development"))
+	r.Use(middleware.CORS(h.cfg.CORSOrigins, h.cfg.IsDev()))
 
 	secret := h.cfg.JWTSecret
 

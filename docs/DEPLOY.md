@@ -52,7 +52,7 @@ it fails while Supabase is briefly unreachable.
 
 | Variable | Staging value | Notes |
 |---|---|---|
-| `APP_ENV` | `production` | Turns **off** the dev CORS exemption (see below) |
+| `APP_ENV` | `staging` | `development` | `staging` | `production`. Only `development` relaxes CORS, so staging is as strict as production |
 | `DATABASE_URL` | Supabase pooled URI | Port 6543, password URL-encoded |
 | `JWT_SECRET` | `openssl rand -base64 48` | Changing it logs everyone out |
 | `ADMIN_USER` | your choice | |
