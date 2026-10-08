@@ -108,7 +108,12 @@ func splitList(s string) []string {
 	parts := strings.Split(s, ",")
 	out := make([]string, 0, len(parts))
 	for _, p := range parts {
-		if p = strings.TrimSpace(p); p != "" {
+		// Trailing slashes are stripped because a browser's Origin header never
+		// has one: "https://app.vercel.app/" in CORS_ORIGINS would silently match
+		// nothing, and the only symptom is every API call failing in the browser
+		// while curl works fine.
+		p = strings.TrimRight(strings.TrimSpace(p), "/")
+		if p != "" {
 			out = append(out, p)
 		}
 	}

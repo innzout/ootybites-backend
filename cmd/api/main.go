@@ -39,7 +39,9 @@ func main() {
 	if err != nil {
 		fatal("config load failed", err)
 	}
-	slog.Info("config loaded", "env", cfg.Env)
+	// Log the parsed CORS allow-list: a mismatch here fails every browser request
+	// while curl still works, which is otherwise very hard to spot from logs.
+	slog.Info("config loaded", "env", cfg.Env, "cors_origins", cfg.CORSOrigins)
 
 	ctx := context.Background()
 

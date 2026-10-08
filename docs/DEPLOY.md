@@ -96,8 +96,26 @@ In `APP_ENV=development` any `localhost` origin is allowed on any port. In
 `CORS_ORIGINS` are accepted**.
 
 A mismatch does not look like a CORS problem from the frontend — every call just
-fails and the screens show generic errors. Check the browser console for
-`No 'Access-Control-Allow-Origin' header`.
+fails and the screens show "Cannot reach the server", which reads like the API
+is down. It is not: `curl` will succeed while the browser fails, because curl
+sends no Origin header.
+
+**Diagnose it from the boot log.** Startup prints the parsed allow-list:
+
+```
+{"msg":"config loaded","env":"staging","cors_origins":["https://your-app.vercel.app"]}
+```
+
+If that list does not contain your exact Vercel origin, that is the bug. Check
+for a trailing slash (stripped automatically since the change that added this
+log), `http` vs `https`, or a typo.
+
+Or ask the API directly — a rejected origin gets no `access-control-allow-origin`
+header back:
+
+```bash
+curl -s -i -X OPTIONS https://<svc>.up.railway.app/api/products   -H "Origin: https://<your-app>.vercel.app"   -H "Access-Control-Request-Method: GET" | grep -i access-control-allow-origin
+```
 
 Vercel gives each deployment its own preview URL. Those are *not* covered by the
 production domain entry, so preview deployments will fail CORS unless you add
