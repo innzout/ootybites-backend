@@ -34,6 +34,9 @@ type Config struct {
 	CloudinaryCloudName string
 	CloudinaryAPIKey    string
 	CloudinaryAPISecret string
+	// Optional Cloudinary upload preset. Must be a SIGNED preset — the name is
+	// folded into the signature below, which an unsigned preset would reject.
+	CloudinaryUploadPreset string
 
 	CORSOrigins []string
 }
@@ -45,21 +48,22 @@ func Load() (*Config, error) {
 	_ = godotenv.Load()
 
 	c := &Config{
-		Env:                 get("APP_ENV", "development"),
-		Port:                get("PORT", "8080"),
-		DatabaseURL:         os.Getenv("DATABASE_URL"),
-		RedisURL:            os.Getenv("REDIS_URL"),
-		JWTSecret:           os.Getenv("JWT_SECRET"),
-		OTPDevMode:          get("OTP_DEV_MODE", "true") == "true",
-		AdminUser:           get("ADMIN_USER", "admin"),
-		AdminPass:           get("ADMIN_PASS", "admin123"),
-		MSG91AuthKey:        os.Getenv("MSG91_AUTH_KEY"),
-		MSG91TemplateID:     os.Getenv("MSG91_TEMPLATE_ID"),
-		MSG91SenderID:       os.Getenv("MSG91_SENDER_ID"),
-		CloudinaryCloudName: os.Getenv("CLOUDINARY_CLOUD_NAME"),
-		CloudinaryAPIKey:    os.Getenv("CLOUDINARY_API_KEY"),
-		CloudinaryAPISecret: os.Getenv("CLOUDINARY_API_SECRET"),
-		CORSOrigins:         splitList(get("CORS_ORIGINS", "http://localhost:3000")),
+		Env:                    get("APP_ENV", "development"),
+		Port:                   get("PORT", "8080"),
+		DatabaseURL:            os.Getenv("DATABASE_URL"),
+		RedisURL:               os.Getenv("REDIS_URL"),
+		JWTSecret:              os.Getenv("JWT_SECRET"),
+		OTPDevMode:             get("OTP_DEV_MODE", "true") == "true",
+		AdminUser:              get("ADMIN_USER", "admin"),
+		AdminPass:              get("ADMIN_PASS", "admin123"),
+		MSG91AuthKey:           os.Getenv("MSG91_AUTH_KEY"),
+		MSG91TemplateID:        os.Getenv("MSG91_TEMPLATE_ID"),
+		MSG91SenderID:          os.Getenv("MSG91_SENDER_ID"),
+		CloudinaryCloudName:    os.Getenv("CLOUDINARY_CLOUD_NAME"),
+		CloudinaryAPIKey:       os.Getenv("CLOUDINARY_API_KEY"),
+		CloudinaryAPISecret:    os.Getenv("CLOUDINARY_API_SECRET"),
+		CloudinaryUploadPreset: os.Getenv("CLOUDINARY_UPLOAD_PRESET"),
+		CORSOrigins:            splitList(get("CORS_ORIGINS", "http://localhost:3000")),
 	}
 
 	// REDIS_URL is optional: when unset, the app falls back to an in-memory

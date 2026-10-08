@@ -60,7 +60,8 @@ it fails while Supabase is briefly unreachable.
 | `CORS_ORIGINS` | `https://<app>.vercel.app` | Exact origin, no trailing slash |
 | `OTP_DEV_MODE` | `true` for now | ⚠️ see below |
 | `REDIS_URL` | *(optional)* | Upstash; without it rate limiting is per-instance |
-| `CLOUDINARY_*` | *(optional)* | Image uploads fall back to local disk without them |
+| `CLOUDINARY_CLOUD_NAME` / `_API_KEY` / `_API_SECRET` | **required once deployed** | see below |
+| `CLOUDINARY_UPLOAD_PRESET` | e.g. `ootybites-staging` | must be a **Signed** preset |
 
 ---
 
@@ -86,6 +87,29 @@ That is acceptable only behind a staging URL nobody has been given. Before real
 customers it must be `false`, which requires `MSG91_AUTH_KEY` and
 `MSG91_TEMPLATE_ID` — with `false` and no keys, login returns **503** by design
 rather than pretending to send a code.
+
+---
+
+## 3b. Cloudinary is not optional once deployed
+
+Without it, uploads are written to the API container's own disk. **Railway
+filesystems are ephemeral**, so every product and banner image is deleted on the
+next deploy and the storefront fills with broken images.
+
+With the `CLOUDINARY_*` variables set, the browser asks the API to sign an upload
+and then posts the file straight to Cloudinary — the API secret never leaves the
+server.
+
+`CLOUDINARY_UPLOAD_PRESET` must be a **Signed** preset (Cloudinary → Settings →
+Upload → Upload presets → Signing Mode). The preset name is folded into the
+signature, so an unsigned preset rejects it. The two errors tell you which is
+wrong:
+
+- `Invalid Signature` — the preset exists but the signed params do not match
+- `Upload preset not found` — wrong name, or it belongs to a different cloud
+
+A genuine Cloudinary failure deliberately does **not** fall back to disk.
+Falling back would look like success and then lose the image on the next deploy.
 
 ---
 

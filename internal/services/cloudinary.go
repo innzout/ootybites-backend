@@ -13,17 +13,19 @@ import (
 // directly to Cloudinary without the API secret ever leaving the server
 // (ARCHITECTURE §8). The secret is used only to compute the signature here.
 type Cloudinary struct {
-	cloudName string
-	apiKey    string
-	apiSecret string
+	cloudName    string
+	apiKey       string
+	apiSecret    string
+	uploadPreset string
 }
 
 // NewCloudinary builds the service from config.
 func NewCloudinary(cfg *config.Config) *Cloudinary {
 	return &Cloudinary{
-		cloudName: cfg.CloudinaryCloudName,
-		apiKey:    cfg.CloudinaryAPIKey,
-		apiSecret: cfg.CloudinaryAPISecret,
+		cloudName:    cfg.CloudinaryCloudName,
+		apiKey:       cfg.CloudinaryAPIKey,
+		apiSecret:    cfg.CloudinaryAPISecret,
+		uploadPreset: cfg.CloudinaryUploadPreset,
 	}
 }
 
@@ -39,6 +41,8 @@ type SignResult struct {
 	Timestamp int64  `json:"timestamp"`
 	Folder    string `json:"folder"`
 	Signature string `json:"signature"`
+	// Empty when no preset is configured; the browser then omits the field.
+	UploadPreset string `json:"upload_preset,omitempty"`
 }
 
 // Sign computes a Cloudinary upload signature for the given folder. Cloudinary
@@ -49,13 +53,23 @@ func (c *Cloudinary) Sign(folder string) SignResult {
 		folder = "ootybites"
 	}
 	ts := time.Now().Unix()
-	toSign := fmt.Sprintf("folder=%s&timestamp=%d%s", folder, ts, c.apiSecret)
-	sum := sha1.Sum([]byte(toSign))
+
+	// Cloudinary signs the upload params sorted alphabetically by key, joined
+	// k=v&k=v, with the API secret appended. "upload_preset" sorts after both
+	// "folder" and "timestamp", so it goes last — getting this order wrong
+	// produces a signature Cloudinary rejects with "Invalid Signature".
+	toSign := fmt.Sprintf("folder=%s&timestamp=%d", folder, ts)
+	if c.uploadPreset != "" {
+		toSign += "&upload_preset=" + c.uploadPreset
+	}
+	sum := sha1.Sum([]byte(toSign + c.apiSecret))
+
 	return SignResult{
-		CloudName: c.cloudName,
-		APIKey:    c.apiKey,
-		Timestamp: ts,
-		Folder:    folder,
-		Signature: hex.EncodeToString(sum[:]),
+		CloudName:    c.cloudName,
+		APIKey:       c.apiKey,
+		Timestamp:    ts,
+		Folder:       folder,
+		Signature:    hex.EncodeToString(sum[:]),
+		UploadPreset: c.uploadPreset,
 	}
 }
