@@ -45,7 +45,7 @@ func main() {
 
 	ctx := context.Background()
 
-	pool, err := db.New(ctx, cfg.DatabaseURL)
+	pool, err := db.New(ctx, cfg.DatabaseURL, cfg.DBMaxConns)
 	if err != nil {
 		fatal("database connection failed", err)
 	}

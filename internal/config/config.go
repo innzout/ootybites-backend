@@ -4,16 +4,24 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/joho/godotenv"
 )
 
+// defaultAdminPass is the bootstrap admin password used only in development.
+// Config.Load refuses to start in staging or production while it is still set.
+const defaultAdminPass = "admin123"
+
 // Config holds all runtime settings, loaded from the environment.
 type Config struct {
 	Env  string // "development" | "production"
 	Port string
+	// DBMaxConns caps the pgx pool. 0 = the db package default; see internal/db.New.
+	DBMaxConns int
 
 	DatabaseURL string
 	RedisURL    string
@@ -50,12 +58,13 @@ func Load() (*Config, error) {
 	c := &Config{
 		Env:                    get("APP_ENV", "development"),
 		Port:                   get("PORT", "8080"),
+		DBMaxConns:             getInt("DB_MAX_CONNS", 0),
 		DatabaseURL:            os.Getenv("DATABASE_URL"),
 		RedisURL:               os.Getenv("REDIS_URL"),
 		JWTSecret:              os.Getenv("JWT_SECRET"),
 		OTPDevMode:             get("OTP_DEV_MODE", "true") == "true",
 		AdminUser:              get("ADMIN_USER", "admin"),
-		AdminPass:              get("ADMIN_PASS", "admin123"),
+		AdminPass:              get("ADMIN_PASS", defaultAdminPass),
 		MSG91AuthKey:           os.Getenv("MSG91_AUTH_KEY"),
 		MSG91TemplateID:        os.Getenv("MSG91_TEMPLATE_ID"),
 		MSG91SenderID:          os.Getenv("MSG91_SENDER_ID"),
@@ -85,6 +94,28 @@ func Load() (*Config, error) {
 	if len(c.JWTSecret) < 32 {
 		return nil, fmt.Errorf("JWT_SECRET must be at least 32 characters (generate with: openssl rand -base64 48)")
 	}
+	// These two previously defaulted to the insecure value in every environment,
+	// so forgetting one was silent: the admin panel stayed on a published
+	// password, or the API kept handing out login codes in its own responses.
+	//
+	// Production refuses to boot - a crash on deploy is the loud failure these
+	// need. Staging only warns, because staging deliberately runs dev OTP for
+	// now and must stay deployable.
+	if c.IsProd() {
+		if c.AdminPass == defaultAdminPass {
+			return nil, fmt.Errorf("ADMIN_PASS is still the default %q - set a real password", defaultAdminPass)
+		}
+		if c.OTPDevMode {
+			return nil, fmt.Errorf("OTP_DEV_MODE must be false in production - dev mode returns the login OTP in the API response, letting anyone sign in as any phone number")
+		}
+	} else if !c.IsDev() {
+		if c.AdminPass == defaultAdminPass {
+			slog.Warn("ADMIN_PASS is the published default - anyone can reach the admin panel", "env", c.Env)
+		}
+		if c.OTPDevMode {
+			slog.Warn("OTP_DEV_MODE is on - the API returns login OTPs in its response, so anyone can sign in as any phone number", "env", c.Env)
+		}
+	}
 	return c, nil
 }
 
@@ -100,6 +131,17 @@ func (c *Config) IsProd() bool { return c.Env == "production" }
 
 // IsDev reports the one environment that gets relaxed behaviour.
 func (c *Config) IsDev() bool { return c.Env == "development" }
+
+// getInt reads an integer env var, returning fallback when unset or unparseable.
+func getInt(key string, fallback int) int {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+		slog.Warn("ignoring unparseable env var", "key", key, "value", v)
+	}
+	return fallback
+}
 
 func get(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {

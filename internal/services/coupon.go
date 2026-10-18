@@ -88,6 +88,13 @@ func EvaluateCoupon(lines []CartLine, subtotal float64, c *models.Coupon, stats 
 	if c.MaxDiscountCap != nil && discount > *c.MaxDiscountCap {
 		discount = *c.MaxDiscountCap
 	}
+	// Never discount more than the items the coupon applies to. The write path
+	// already bounds discount_value to 0-100 (handlers.CreateCoupon), so this is
+	// defence in depth for rows edited directly in SQL or predating that check:
+	// an out-of-range percentage would otherwise produce a negative order total.
+	if discount > applicable {
+		discount = applicable
+	}
 	discount = math.Round(discount*100) / 100
 	return CouponResult{Valid: true, Discount: discount}
 }

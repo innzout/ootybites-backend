@@ -20,8 +20,17 @@ type Pool = pgxpool.Pool
 // query can't hold a pool connection and stall unrelated requests.
 const statementTimeoutMS = "30000"
 
+// defaultMaxConns sizes the pool for a single instance on the Supabase free
+// tier. Override with DB_MAX_CONNS when running more than one replica.
+const defaultMaxConns = 10
+
 // New opens and verifies a pooled connection to Postgres, tuned for Supabase.
-func New(ctx context.Context, databaseURL string) (*Pool, error) {
+//
+// maxConns is per process, so it multiplies by the replica count against one
+// shared Supabase pool: three replicas at 10 each want 30 connections, which
+// the free tier will not grant. Scale it down as you scale out. Zero or less
+// falls back to defaultMaxConns.
+func New(ctx context.Context, databaseURL string, maxConns int) (*Pool, error) {
 	cfg, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse database url: %w", err)
@@ -34,7 +43,10 @@ func New(ctx context.Context, databaseURL string) (*Pool, error) {
 	cfg.ConnConfig.Tracer = &slowQueryTracer{threshold: 500 * time.Millisecond}
 
 	// Conservative pool — Supabase free tier caps direct connections.
-	cfg.MaxConns = 10
+	if maxConns <= 0 {
+		maxConns = defaultMaxConns
+	}
+	cfg.MaxConns = int32(maxConns)
 	cfg.MinConns = 2
 	cfg.MaxConnLifetime = time.Hour
 	cfg.MaxConnIdleTime = 30 * time.Minute

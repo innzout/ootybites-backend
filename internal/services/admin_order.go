@@ -75,11 +75,18 @@ func (s *AdminOrders) List(ctx context.Context, f OrderFilter) ([]models.Order, 
 		add("status = $%d", f.Status)
 	}
 	// Custom range wins over month when both are set.
+	// Sargable date predicates: comparing `placed_at` directly lets
+	// idx_orders_status_placed / idx_orders_placed be used. Wrapping the column
+	// (placed_at::date, to_char(placed_at, ...)) makes those indexes unusable and
+	// forces a full scan of `orders` on every admin page view â exactly what the
+	// "index-aware admin order list" rule exists to prevent. The upper bound is
+	// exclusive-next-day so the `to` day is still fully included.
 	if f.From != "" && f.To != "" {
-		add("placed_at::date >= $%d", f.From)
-		add("placed_at::date <= $%d", f.To)
+		add("placed_at >= $%d::date", f.From)
+		add("placed_at < ($%d::date + 1)", f.To)
 	} else if f.Month != "" {
-		add("to_char(placed_at, 'YYYY-MM') = $%d", f.Month)
+		add("placed_at >= to_date($%d, 'YYYY-MM')", f.Month)
+		add("placed_at < to_date($%d, 'YYYY-MM') + interval '1 month'", f.Month)
 	}
 	whereSQL := strings.Join(where, " AND ")
 

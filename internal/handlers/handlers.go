@@ -49,7 +49,15 @@ func New(cfg *config.Config, pool *db.Pool, rc *redis.Client, limiter middleware
 	coupons := services.NewCoupons(pool)
 	// One short-lived TTL store, shared by OTP codes and single-use game run
 	// tickets — two in-memory maps would be pure duplication.
-	otpStore := services.NewMemoryOTPStore()
+	// Redis-backed when configured: the in-memory map is process-local, so with
+	// more than one replica a code written on one instance cannot be verified on
+	// another, and every pending code is lost on deploy.
+	var otpStore services.OTPStore
+	if rc != nil {
+		otpStore = services.NewRedisOTPStore(rc)
+	} else {
+		otpStore = services.NewMemoryOTPStore()
+	}
 
 	return &Handlers{
 		cfg:           cfg,

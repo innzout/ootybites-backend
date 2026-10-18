@@ -591,7 +591,7 @@ func nextOrderNumber(ctx context.Context, tx pgx.Tx) (string, error) {
 	today := time.Now().Format("20060102")
 	var seq int
 	if err := tx.QueryRow(ctx,
-		`SELECT count(*)+1 FROM orders WHERE placed_at::date = current_date`).Scan(&seq); err != nil {
+		`SELECT count(*)+1 FROM orders WHERE placed_at >= current_date AND placed_at < current_date + 1`).Scan(&seq); err != nil {
 		return "", fmt.Errorf("order number seq: %w", err)
 	}
 	// Prefix is admin-configurable via settings; fall back to "OB" if unset.

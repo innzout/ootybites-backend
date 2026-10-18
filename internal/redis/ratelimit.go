@@ -39,3 +39,18 @@ func (c *Client) GetOTP(ctx context.Context, phone string) (string, error) {
 func (c *Client) DeleteOTP(ctx context.Context, phone string) error {
 	return c.rdb.Del(ctx, "otp:"+phone).Err()
 }
+
+// IncrWithTTL increments a counter and starts its TTL on the first hit,
+// returning the new value. Used for the OTP wrong-attempt cap, which must be
+// atomic: a read-modify-write would let concurrent guesses share a stale count
+// and slip past the cap.
+func (c *Client) IncrWithTTL(ctx context.Context, key string, ttl time.Duration) (int, error) {
+	n, err := c.rdb.Incr(ctx, key).Result()
+	if err != nil {
+		return 0, err
+	}
+	if n == 1 {
+		c.rdb.Expire(ctx, key, ttl)
+	}
+	return int(n), nil
+}

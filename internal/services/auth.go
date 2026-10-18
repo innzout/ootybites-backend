@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log/slog"
 	"math/big"
-	"sync"
 	"time"
 
 	"github.com/innzout/ootybites/internal/config"
@@ -21,13 +20,13 @@ import (
 
 // Common auth errors surfaced to handlers.
 var (
-	ErrInvalidOTP         = errors.New("invalid or expired code")
+	ErrInvalidOTP = errors.New("invalid or expired code")
 	// ErrOTPAttemptsExceeded means the attempt cap burned the code. Reported
 	// distinctly from a plain wrong code: otherwise the customer keeps retyping
 	// a code that can no longer ever work, with nothing telling them to request
 	// a fresh one.
 	ErrOTPAttemptsExceeded = errors.New("too many incorrect attempts")
-	ErrInvalidCredentials = errors.New("invalid credentials")
+	ErrInvalidCredentials  = errors.New("invalid credentials")
 )
 
 const otpTTL = 5 * time.Minute
@@ -39,11 +38,6 @@ type Auth struct {
 	otp OTPStore
 	sms SMSSender // nil when MSG91 is unconfigured (dev)
 
-	// Wrong-code attempts per phone for the life of the current code. A 6-digit
-	// OTP is only ~20 bits, so without a cap it is brute-forceable within the
-	// 5-minute window; route rate-limiting alone throttles but does not stop it.
-	attemptsMu sync.Mutex
-	attempts   map[string]int
 }
 
 // maxOTPAttempts is how many wrong codes a phone may submit before the issued
@@ -53,7 +47,7 @@ const maxOTPAttempts = 5
 // NewAuth builds the auth service. sms may be nil; live sends then fail loudly
 // rather than reporting a success that never reached the customer.
 func NewAuth(cfg *config.Config, pool *db.Pool, otp OTPStore, sms SMSSender) *Auth {
-	return &Auth{cfg: cfg, db: pool, otp: otp, sms: sms, attempts: map[string]int{}}
+	return &Auth{cfg: cfg, db: pool, otp: otp, sms: sms}
 }
 
 // RequestOTP generates a code for the phone and "sends" it. In dev mode MSG91 is
@@ -85,18 +79,23 @@ func (a *Auth) RequestOTP(ctx context.Context, phone string) (devCode string, er
 	return "", nil
 }
 
+// attemptKey namespaces the wrong-code counter so it cannot collide with the
+// stored code for the same phone.
+func attemptKey(phone string) string { return "otpfail:" + phone }
+
 func (a *Auth) resetAttempts(phone string) {
-	a.attemptsMu.Lock()
-	delete(a.attempts, phone)
-	a.attemptsMu.Unlock()
+	a.otp.Delete(attemptKey(phone))
 }
 
 // registerFailure counts a wrong code and reports whether the cap is now hit.
+//
+// The counter lives in the OTPStore rather than a process-local map. A 6-digit
+// OTP is only ~20 bits, so without a cap it is brute-forceable inside the
+// 5-minute window, and route rate-limiting throttles but does not stop that.
+// Held per-process, the cap multiplied by the replica count and reset on every
+// deploy; in the store it is shared and expires with the code it guards.
 func (a *Auth) registerFailure(phone string) bool {
-	a.attemptsMu.Lock()
-	defer a.attemptsMu.Unlock()
-	a.attempts[phone]++
-	return a.attempts[phone] >= maxOTPAttempts
+	return a.otp.Incr(attemptKey(phone), otpTTL) >= maxOTPAttempts
 }
 
 // VerifyOTP checks the code, finds-or-creates the customer, and issues a

@@ -16,13 +16,13 @@ var ErrNoOpenSeason = errors.New("no open season")
 
 // Season is a league period: a window with a prize and, once closed, a winner.
 type Season struct {
-	ID        string     `json:"id"`
-	Name      string     `json:"name"`
-	Prize     *string    `json:"prize"`
-	StartsAt  time.Time  `json:"starts_at"`
-	EndsAt    *time.Time `json:"ends_at"`
-	WinnerID  *string    `json:"winner_customer_id"`
-	WinnerScore *int     `json:"winner_score"`
+	ID          string     `json:"id"`
+	Name        string     `json:"name"`
+	Prize       *string    `json:"prize"`
+	StartsAt    time.Time  `json:"starts_at"`
+	EndsAt      *time.Time `json:"ends_at"`
+	WinnerID    *string    `json:"winner_customer_id"`
+	WinnerScore *int       `json:"winner_score"`
 	// Filled for admin views only — never on the public endpoint.
 	WinnerName  *string `json:"winner_name,omitempty"`
 	WinnerPhone *string `json:"winner_phone,omitempty"`

@@ -30,8 +30,10 @@ Two things to know:
   and `?`. Unencoded they corrupt the URI and you get a confusing
   `parse database url` failure at boot.
 - **The pool asks for up to 10 connections** (`MaxConns = 10` in `internal/db`).
-  That is sized for the Supabase free tier. If you scale Railway past one
-  replica, lower it or raise the Supabase pool.
+  That is sized for the Supabase free tier. It is **per process**, so it multiplies
+  by the replica count against one shared Supabase pool: three replicas want 30
+  connections. Set `DB_MAX_CONNS` to divide the budget as you scale out, or
+  raise the Supabase pool.
 
 **You do not need to run migrations.** They are embedded in the binary and
 applied at boot; the log line is `migrations up to date`.
@@ -59,7 +61,10 @@ it fails while Supabase is briefly unreachable.
 | `ADMIN_PASS` | **a new password** | ⚠️ see below |
 | `CORS_ORIGINS` | `https://<app>.vercel.app` | Exact origin, no trailing slash |
 | `OTP_DEV_MODE` | `true` for now | ⚠️ see below |
-| `REDIS_URL` | *(optional)* | Upstash; without it rate limiting is per-instance |
+| `REDIS_URL` | *(recommended)* | Upstash. Without it, rate limits, the OTP
+  wrong-code cap and OTP codes themselves are all per-instance - so **customer
+  login breaks outright at more than one replica** |
+| `DB_MAX_CONNS` | *(optional)* | Per-process pgx pool cap; default 10 |
 | `CLOUDINARY_CLOUD_NAME` / `_API_KEY` / `_API_SECRET` | **required once deployed** | see below |
 | `CLOUDINARY_UPLOAD_PRESET` | e.g. `ootybites-staging` | must be a **Signed** preset |
 
@@ -67,8 +72,15 @@ it fails while Supabase is briefly unreachable.
 
 ## 3. Two defaults that are dangerous in production
 
-Both of these **default to the unsafe value when unset**, so forgetting them is
-silent rather than loud.
+Both **default to the unsafe value when unset**. As of the security pass this
+is no longer silent:
+
+- `APP_ENV=production` **refuses to boot** while either is still unsafe, and
+  logs which one at `ERROR`.
+- `APP_ENV=staging` boots but logs a `WARN` for each, because staging
+  deliberately runs dev OTP for now and must stay deployable.
+
+So staging is unchanged by this; production cannot be deployed wrong.
 
 ### `ADMIN_PASS` defaults to `admin123`
 
