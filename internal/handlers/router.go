@@ -87,6 +87,16 @@ func (h *Handlers) Router() http.Handler {
 			cust.Get("/orders/{id}/reorder", h.Reorder)
 			cust.Post("/orders/{id}/cancel", h.CancelOrder)
 
+			// Reviews. Signed-in only, by design: there is no anonymous read
+			// route, so reviews never reach logged-out visitors or crawlers.
+			// Writing is additionally gated on a delivered order for the
+			// product (enforced in the service) and rate-limited, since it
+			// writes a row per call.
+			cust.Get("/reviews", h.ListProductReviews)
+			cust.With(middleware.RateLimit(h.limiter, "review_save", 20, time.Minute)).
+				Post("/reviews", h.SaveReview)
+			cust.Delete("/reviews/{id}", h.DeleteReview)
+
 			cust.Get("/notifications", h.ListNotifications)
 			cust.Post("/notifications/read", h.MarkNotificationsRead)
 
@@ -144,6 +154,10 @@ func (h *Handlers) Router() http.Handler {
 					su.Put("/admins/{id}", h.AdminUpdateAdmin)
 					su.Delete("/admins/{id}", h.AdminDeleteAdmin)
 				})
+
+				// Reviews (moderation)
+				sec.Get("/reviews", h.AdminListReviews)
+				sec.Delete("/reviews/{id}", h.AdminDeleteReview)
 
 				// Catalog
 				sec.Get("/products", h.AdminListProducts)

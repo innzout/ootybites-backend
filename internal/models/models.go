@@ -290,3 +290,26 @@ type OrderItem struct {
 	Qty          int     `json:"qty"`
 	LineTotal    float64 `json:"line_total"`
 }
+
+// Review is one customer's rating of a product.
+//
+// Visible to signed-in customers and admins only, so it is never rendered for
+// anonymous visitors and carries no public structured data.
+//
+// The Customer*/Product* fields are joined in for display and are empty on the
+// write path; omitempty keeps them out of the payload when unset.
+type Review struct {
+	ID         string    `json:"id"`
+	ProductID  string    `json:"product_id"`
+	CustomerID string    `json:"customer_id"`
+	Rating     int       `json:"rating"`
+	Body       string    `json:"body"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+
+	CustomerName string `json:"customer_name,omitempty"`
+	// Admin-only: never populated on the customer-facing list.
+	CustomerPhone string `json:"customer_phone,omitempty"`
+	ProductName   string `json:"product_name,omitempty"`
+	ProductSlug   string `json:"product_slug,omitempty"`
+}

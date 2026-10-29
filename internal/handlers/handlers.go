@@ -41,6 +41,7 @@ type Handlers struct {
 	pages         *services.Pages
 	categories    *services.Categories
 	game          *services.Game
+	reviews       *services.Reviews
 }
 
 // New builds the handler set and its services. `limiter` is Redis-backed when
@@ -83,6 +84,7 @@ func New(cfg *config.Config, pool *db.Pool, rc *redis.Client, limiter middleware
 		pages:         services.NewPages(pool),
 		categories:    services.NewCategories(pool),
 		game:          services.NewGame(pool, cfg.JWTSecret, otpStore),
+		reviews:       services.NewReviews(pool),
 	}
 }
 
