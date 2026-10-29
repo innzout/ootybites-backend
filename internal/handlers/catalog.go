@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/innzout/ootybites/internal/services"
@@ -19,10 +20,25 @@ func (h *Handlers) ListProducts(w http.ResponseWriter, r *http.Request) {
 	page, _ := strconv.Atoi(q.Get("page"))
 	limit, _ := strconv.Atoi(q.Get("limit"))
 
+	// ids is a comma-separated allow-list, capped so the parameter cannot be
+	// used to pull the whole catalogue in one unpaginated request.
+	var ids []string
+	if raw := strings.TrimSpace(q.Get("ids")); raw != "" {
+		for _, id := range strings.Split(raw, ",") {
+			if id = strings.TrimSpace(id); id != "" {
+				ids = append(ids, id)
+			}
+			if len(ids) >= 100 {
+				break
+			}
+		}
+	}
+
 	products, total, err := h.catalog.ListProducts(r.Context(), services.StorefrontQuery{
 		Q:          q.Get("q"),
 		CategoryID: q.Get("category"),
 		Sort:       q.Get("sort"),
+		IDs:        ids,
 		Page:       page,
 		Limit:      limit,
 	})

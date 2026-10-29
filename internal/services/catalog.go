@@ -29,9 +29,13 @@ func NewCatalog(pool *db.Pool) *Catalog { return &Catalog{db: pool} }
 type StorefrontQuery struct {
 	Q          string // name search
 	CategoryID string // filter by category (empty = all)
-	Sort       string // newest | price_asc | price_desc | name
-	Page       int
-	Limit      int
+	Sort       string // featured | newest | price_asc | price_desc | name
+	// IDs restricts the page to specific products. The wishlist uses it to load
+	// live price and stock for the items it has kept in localStorage, in one
+	// request rather than one per item.
+	IDs   []string
+	Page  int
+	Limit int
 }
 
 // ListProducts returns a page of active products (with active variants and
@@ -55,6 +59,10 @@ func (c *Catalog) ListProducts(ctx context.Context, f StorefrontQuery) ([]models
 		args = append(args, id)
 		where += fmt.Sprintf(" AND category_id = $%d", len(args))
 	}
+	if len(f.IDs) > 0 {
+		args = append(args, f.IDs)
+		where += fmt.Sprintf(" AND id = ANY($%d)", len(args))
+	}
 
 	// Sort whitelist. Price sorts use the product's lowest active variant price.
 	minPrice := "(SELECT min(price) FROM product_variants v WHERE v.product_id = products.id AND v.is_active)"
@@ -66,6 +74,15 @@ func (c *Catalog) ListProducts(ctx context.Context, f StorefrontQuery) ([]models
 		orderBy = minPrice + " DESC NULLS LAST"
 	case "name":
 		orderBy = "name ASC"
+	case "featured":
+		// Shop order: follow the category order the admin set in Categories
+		// (sort_order), newest first within each category. This is what makes
+		// the storefront lead with snacks rather than whatever happened to be
+		// added last - and it stays a merchandising decision in the admin panel
+		// instead of a category name hardcoded in the app. Products with no
+		// category fall to the end.
+		orderBy = `(SELECT c.sort_order FROM categories c WHERE c.id = products.category_id) ASC NULLS LAST,
+		           created_at DESC`
 	}
 
 	var total int
