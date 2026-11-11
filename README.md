@@ -13,6 +13,33 @@ go run ./cmd/api         # serves on :8080
 Migrations in `migrations/*.sql` are embedded in the binary and applied
 automatically at boot — there is no separate migrate step.
 
+## Tests
+
+```bash
+go test ./...            # unit tests; no database needed
+```
+
+The coupon engine is covered by pure unit tests — it decides how much money
+comes off an order, so a silent change there is the most expensive kind.
+
+The review permission rules (who may write a review, who may delete one) live
+in SQL, so they are covered by **integration tests against a real Postgres**.
+A mock would test nothing: the whole rule is the
+`orders → order_items → product_variants` join and the ownership predicate
+inside the `DELETE`.
+
+```bash
+createdb ootybites_test
+TEST_DATABASE_URL='postgres://postgres:PASS@127.0.0.1:5432/ootybites_test?sslmode=disable' \
+  go test ./internal/services/ -run Integration -v
+```
+
+The tests run the migrations themselves and clean up the rows they create, so
+the database can be reused. Without `TEST_DATABASE_URL` they skip, which keeps
+plain `go test ./...` green on a machine with no database.
+
+Point it at a **throwaway database**, never a real one.
+
 ## Staging (Railway)
 
 **Full step-by-step guide: [docs/DEPLOY.md](docs/DEPLOY.md)** — Supabase connection
