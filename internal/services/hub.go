@@ -24,13 +24,15 @@ type HubInput struct {
 	Name     string
 	DealerID *string
 	IsActive bool
+	Lat      *float64
+	Lng      *float64
 }
 
 // List returns hubs with dealer name and how many areas they serve.
 func (s *Hubs) List(ctx context.Context) ([]models.Hub, error) {
 	rows, err := s.db.Query(ctx,
 		`SELECT h.id, h.name, h.dealer_id, d.name, h.is_active,
-		        (SELECT count(*) FROM areas a WHERE a.hub_id = h.id), h.created_at
+		        (SELECT count(*) FROM areas a WHERE a.hub_id = h.id), h.lat, h.lng, h.created_at
 		 FROM hubs h LEFT JOIN dealers d ON d.id = h.dealer_id
 		 ORDER BY h.name`)
 	if err != nil {
@@ -40,7 +42,7 @@ func (s *Hubs) List(ctx context.Context) ([]models.Hub, error) {
 	out := []models.Hub{}
 	for rows.Next() {
 		var h models.Hub
-		if err := rows.Scan(&h.ID, &h.Name, &h.DealerID, &h.DealerName, &h.IsActive, &h.AreaCount, &h.CreatedAt); err != nil {
+		if err := rows.Scan(&h.ID, &h.Name, &h.DealerID, &h.DealerName, &h.IsActive, &h.AreaCount, &h.Lat, &h.Lng, &h.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, h)
@@ -51,16 +53,16 @@ func (s *Hubs) List(ctx context.Context) ([]models.Hub, error) {
 func (s *Hubs) Create(ctx context.Context, in HubInput) (*models.Hub, error) {
 	var id string
 	if err := s.db.QueryRow(ctx,
-		`INSERT INTO hubs (name, dealer_id, is_active) VALUES ($1,$2,$3) RETURNING id`,
-		in.Name, in.DealerID, in.IsActive).Scan(&id); err != nil {
+		`INSERT INTO hubs (name, dealer_id, is_active, lat, lng) VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+		in.Name, in.DealerID, in.IsActive, in.Lat, in.Lng).Scan(&id); err != nil {
 		return nil, fmt.Errorf("insert hub: %w", err)
 	}
 	return s.getByID(ctx, id)
 }
 
 func (s *Hubs) Update(ctx context.Context, id string, in HubInput) (*models.Hub, error) {
-	tag, err := s.db.Exec(ctx, `UPDATE hubs SET name=$2, dealer_id=$3, is_active=$4 WHERE id=$1`,
-		id, in.Name, in.DealerID, in.IsActive)
+	tag, err := s.db.Exec(ctx, `UPDATE hubs SET name=$2, dealer_id=$3, is_active=$4, lat=$5, lng=$6 WHERE id=$1`,
+		id, in.Name, in.DealerID, in.IsActive, in.Lat, in.Lng)
 	if err != nil {
 		return nil, fmt.Errorf("update hub: %w", err)
 	}
@@ -327,9 +329,9 @@ func (s *Hubs) getByID(ctx context.Context, id string) (*models.Hub, error) {
 	var h models.Hub
 	err := s.db.QueryRow(ctx,
 		`SELECT h.id, h.name, h.dealer_id, d.name, h.is_active,
-		        (SELECT count(*) FROM areas a WHERE a.hub_id = h.id), h.created_at
+		        (SELECT count(*) FROM areas a WHERE a.hub_id = h.id), h.lat, h.lng, h.created_at
 		 FROM hubs h LEFT JOIN dealers d ON d.id = h.dealer_id WHERE h.id=$1`, id).
-		Scan(&h.ID, &h.Name, &h.DealerID, &h.DealerName, &h.IsActive, &h.AreaCount, &h.CreatedAt)
+		Scan(&h.ID, &h.Name, &h.DealerID, &h.DealerName, &h.IsActive, &h.AreaCount, &h.Lat, &h.Lng, &h.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}

@@ -161,3 +161,18 @@ func (h *Handlers) writeOrderResult(w http.ResponseWriter, o *models.Order, err 
 	}
 	return true
 }
+
+// AdminOrdersMap returns pinned orders for the admin map view.
+//
+// Separate from the order list on purpose: the list is paginated for a table,
+// whereas a map needs every pin in the filtered range at once, and needs far
+// fewer columns per row.
+func (h *Handlers) AdminOrdersMap(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	points, err := h.adminOrders.MapPoints(r.Context(), q.Get("status"), q.Get("from"), q.Get("to"))
+	if err != nil {
+		response.Fail(w, http.StatusInternalServerError, response.CodeInternal, "Could not load the orders map")
+		return
+	}
+	response.OK(w, map[string]any{"points": points})
+}

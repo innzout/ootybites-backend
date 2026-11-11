@@ -13,13 +13,18 @@ import (
 // ---------------- Admin: hubs ----------------
 
 type hubBody struct {
-	Name     string  `json:"name"`
-	DealerID *string `json:"dealer_id"`
-	IsActive *bool   `json:"is_active"`
+	Name     string   `json:"name"`
+	DealerID *string  `json:"dealer_id"`
+	IsActive *bool    `json:"is_active"`
+	Lat      *float64 `json:"lat"`
+	Lng      *float64 `json:"lng"`
 }
 
 func (b hubBody) toInput() services.HubInput {
-	return services.HubInput{Name: b.Name, DealerID: b.DealerID, IsActive: deref(b.IsActive, true)}
+	return services.HubInput{
+		Name: b.Name, DealerID: b.DealerID, IsActive: deref(b.IsActive, true),
+		Lat: b.Lat, Lng: b.Lng,
+	}
 }
 
 func (h *Handlers) AdminListHubs(w http.ResponseWriter, r *http.Request) {

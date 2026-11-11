@@ -189,13 +189,18 @@ type Notification struct {
 // Hub is a fulfilment centre run by a dealer; it serves many areas and holds
 // its own stock for 24-hour (express) delivery.
 type Hub struct {
-	ID         string    `json:"id"`
-	Name       string    `json:"name"`
-	DealerID   *string   `json:"dealer_id"`
-	DealerName *string   `json:"dealer_name"`
-	IsActive   bool      `json:"is_active"`
-	AreaCount  int       `json:"area_count"`
-	CreatedAt  time.Time `json:"created_at"`
+	ID         string  `json:"id"`
+	Name       string  `json:"name"`
+	DealerID   *string `json:"dealer_id"`
+	DealerName *string `json:"dealer_name"`
+	IsActive   bool    `json:"is_active"`
+	AreaCount  int     `json:"area_count"`
+	// Map pin for the hub. Nullable: a hub created before pins existed, or one
+	// an admin has not placed yet, has none - the orders map then falls back to
+	// the store address as the route origin.
+	Lat       *float64  `json:"lat"`
+	Lng       *float64  `json:"lng"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // Area maps a delivery pincode (in a city) to a fulfilment hub (exclusive).

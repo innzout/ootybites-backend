@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/innzout/ootybites/internal/db"
 	"github.com/innzout/ootybites/internal/models"
@@ -482,4 +483,89 @@ func (s *AdminOrders) Stats(ctx context.Context, from, to string) (*DashboardSta
 	}
 	st.RecentOrders = recent
 	return st, nil
+}
+
+// ---------------- Orders map ----------------
+
+// OrderMapPoint is one pin on the admin orders map: just enough to draw the
+// marker, identify the order, and route to it. Deliberately not the full order
+// - a map may plot hundreds of these at once.
+type OrderMapPoint struct {
+	ID          string    `json:"id"`
+	OrderNumber string    `json:"order_number"`
+	Status      string    `json:"status"`
+	PlacedAt    time.Time `json:"placed_at"`
+	Total       float64   `json:"total"`
+	IsExpress   bool      `json:"is_express"`
+
+	ShipName    string  `json:"ship_name"`
+	ShipPhone   string  `json:"ship_phone"`
+	ShipLine1   string  `json:"ship_line1"`
+	ShipCity    string  `json:"ship_city"`
+	ShipPincode string  `json:"ship_pincode"`
+	ShipLat     float64 `json:"ship_lat"`
+	ShipLng     float64 `json:"ship_lng"`
+
+	// The hub this order dispatches from - the origin of the delivery route.
+	// Null when the order has no hub, or the hub has not been pinned yet; the
+	// UI then falls back to the store address.
+	HubID   *string  `json:"hub_id"`
+	HubName *string  `json:"hub_name"`
+	HubLat  *float64 `json:"hub_lat"`
+	HubLng  *float64 `json:"hub_lng"`
+}
+
+// mapPointLimit caps how many pins one request can return. A map cannot
+// usefully show more, and it keeps the payload bounded.
+const mapPointLimit = 1000
+
+// MapPoints returns pinned orders for the admin map, newest first.
+//
+// Only orders that actually carry a delivery pin are returned: an order placed
+// before the map picker existed, or one where the customer typed the address
+// without pinning it, has nothing to plot and is silently skipped rather than
+// dropped at (0,0) in the Atlantic.
+func (s *AdminOrders) MapPoints(ctx context.Context, status, from, to string) ([]OrderMapPoint, error) {
+	where := "WHERE o.ship_lat IS NOT NULL AND o.ship_lng IS NOT NULL"
+	args := []any{}
+	if status != "" {
+		args = append(args, status)
+		where += fmt.Sprintf(" AND o.status = $%d", len(args))
+	}
+	// Same sargable predicates as the order list, so the status/date indexes
+	// still apply (see the note on List).
+	rangeSQL, rangeArgs := dateRangePredicate(from, to, len(args)+1)
+	if rangeSQL != "" {
+		where += strings.ReplaceAll(rangeSQL, " AND placed_at", " AND o.placed_at")
+		args = append(args, rangeArgs...)
+	}
+
+	args = append(args, mapPointLimit)
+	rows, err := s.db.Query(ctx, fmt.Sprintf(`
+		SELECT o.id, o.order_number, o.status, o.placed_at, o.total, o.is_express,
+		       o.ship_name, o.ship_phone, o.ship_line1, o.ship_city, o.ship_pincode,
+		       o.ship_lat, o.ship_lng,
+		       o.hub_id, h.name, h.lat, h.lng
+		FROM orders o
+		LEFT JOIN hubs h ON h.id = o.hub_id
+		%s
+		ORDER BY o.placed_at DESC
+		LIMIT $%d`, where, len(args)), args...)
+	if err != nil {
+		return nil, fmt.Errorf("orders map: %w", err)
+	}
+	defer rows.Close()
+
+	out := []OrderMapPoint{}
+	for rows.Next() {
+		var p OrderMapPoint
+		if err := rows.Scan(&p.ID, &p.OrderNumber, &p.Status, &p.PlacedAt, &p.Total, &p.IsExpress,
+			&p.ShipName, &p.ShipPhone, &p.ShipLine1, &p.ShipCity, &p.ShipPincode,
+			&p.ShipLat, &p.ShipLng,
+			&p.HubID, &p.HubName, &p.HubLat, &p.HubLng); err != nil {
+			return nil, fmt.Errorf("scan map point: %w", err)
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
 }

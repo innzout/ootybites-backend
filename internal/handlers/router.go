@@ -156,6 +156,9 @@ func (h *Handlers) Router() http.Handler {
 				})
 
 				// Reviews (moderation)
+				// Orders map: every pin in the filtered range, for the map view.
+				sec.Get("/orders/map", h.AdminOrdersMap)
+
 				sec.Get("/reviews", h.AdminListReviews)
 				sec.Delete("/reviews/{id}", h.AdminDeleteReview)
 
