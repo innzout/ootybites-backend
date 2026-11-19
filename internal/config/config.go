@@ -22,6 +22,10 @@ type Config struct {
 	Port string
 	// DBMaxConns caps the pgx pool. 0 = the db package default; see internal/db.New.
 	DBMaxConns int
+	// TrustedProxyHops is how many reverse proxies in front of the API append to
+	// X-Forwarded-For. It decides which entry of that header is believed for
+	// rate limiting; see middleware.ClientIP. -1 = not set, resolved in Load.
+	TrustedProxyHops int
 
 	DatabaseURL string
 	RedisURL    string
@@ -59,6 +63,7 @@ func Load() (*Config, error) {
 		Env:                    get("APP_ENV", "development"),
 		Port:                   get("PORT", "8080"),
 		DBMaxConns:             getInt("DB_MAX_CONNS", 0),
+		TrustedProxyHops:       getInt("TRUSTED_PROXY_HOPS", -1),
 		DatabaseURL:            os.Getenv("DATABASE_URL"),
 		RedisURL:               os.Getenv("REDIS_URL"),
 		JWTSecret:              os.Getenv("JWT_SECRET"),
@@ -89,6 +94,17 @@ func Load() (*Config, error) {
 	}
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("missing required env vars: %s", strings.Join(missing, ", "))
+	}
+	// Unset: assume no proxy locally and exactly one (the platform edge, e.g.
+	// Railway) everywhere else. Defaulting to zero when deployed would key every
+	// visitor on the proxy's own address, so all customers would share one OTP
+	// rate-limit bucket.
+	if c.TrustedProxyHops < 0 {
+		if c.IsDev() {
+			c.TrustedProxyHops = 0
+		} else {
+			c.TrustedProxyHops = 1
+		}
 	}
 	// A short JWT secret weakens every token. Require ≥32 chars.
 	if len(c.JWTSecret) < 32 {

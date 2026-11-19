@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/innzout/ootybites/pkg/response"
@@ -106,7 +107,7 @@ func CORS(allowed []string, devMode bool) func(http.Handler) http.Handler {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Set("Vary", "Origin")
 				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Request-ID")
+				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Request-ID, Idempotency-Key")
 				w.Header().Set("Access-Control-Max-Age", "300")
 			}
 			if r.Method == http.MethodOptions {
@@ -141,4 +142,40 @@ func AudienceFrom(ctx context.Context) string {
 func RoleFrom(ctx context.Context) string {
 	r, _ := ctx.Value(ctxRole).(string)
 	return r
+}
+
+// maxJSONBody caps a request body. Every JSON payload this API accepts is a
+// few kilobytes; without a cap a client can post an arbitrarily large body and
+// have the server buffer and parse it.
+const maxJSONBody = 1 << 20 // 1 MiB
+
+// BodyLimit rejects oversized request bodies. Multipart uploads are exempt
+// because the upload handler applies its own, larger, limit.
+func BodyLimit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil && !strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
+			r.Body = http.MaxBytesReader(w, r.Body, maxJSONBody)
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// SecurityHeaders sets conservative response headers for an API that serves
+// JSON and uploaded images, never pages.
+func SecurityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		// Never let a browser guess a type: an uploaded file must not be
+		// reinterpreted as HTML or script.
+		h.Set("X-Content-Type-Options", "nosniff")
+		// Nothing here is meant to be framed.
+		h.Set("X-Frame-Options", "DENY")
+		// An API response has no reason to load anything.
+		h.Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+		h.Set("Referrer-Policy", "no-referrer")
+		// Cross-origin on purpose: the storefront on another origin displays
+		// images served from /uploads.
+		h.Set("Cross-Origin-Resource-Policy", "cross-origin")
+		next.ServeHTTP(w, r)
+	})
 }

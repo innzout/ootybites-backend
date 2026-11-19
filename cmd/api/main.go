@@ -41,7 +41,9 @@ func main() {
 	}
 	// Log the parsed CORS allow-list: a mismatch here fails every browser request
 	// while curl still works, which is otherwise very hard to spot from logs.
-	slog.Info("config loaded", "env", cfg.Env, "cors_origins", cfg.CORSOrigins)
+	slog.Info("config loaded", "env", cfg.Env, "cors_origins", cfg.CORSOrigins,
+		"trusted_proxy_hops", cfg.TrustedProxyHops)
+	middleware.SetTrustedProxyHops(cfg.TrustedProxyHops)
 
 	ctx := context.Background()
 

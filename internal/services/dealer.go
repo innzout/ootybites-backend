@@ -116,6 +116,9 @@ func (s *Dealers) Authenticate(ctx context.Context, username, plain string) (*mo
 		`SELECT id, password_hash, is_active FROM dealers WHERE username=$1`,
 		strings.ToLower(strings.TrimSpace(username))).Scan(&id, &hash, &active)
 	if errors.Is(err, pgx.ErrNoRows) {
+		// Same cost as a wrong password, so timing does not reveal whether
+		// the username exists.
+		password.EqualiseTiming(plain)
 		return nil, ErrInvalidLogin
 	}
 	if err != nil {

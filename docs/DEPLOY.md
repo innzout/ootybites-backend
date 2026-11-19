@@ -65,6 +65,7 @@ it fails while Supabase is briefly unreachable.
   wrong-code cap and OTP codes themselves are all per-instance - so **customer
   login breaks outright at more than one replica** |
 | `DB_MAX_CONNS` | *(optional)* | Per-process pgx pool cap; default 10 |
+| `TRUSTED_PROXY_HOPS` | *(optional)* | Reverse proxies in front of the API. Defaults to `1` outside development, which is right for Railway. See below |
 | `CLOUDINARY_CLOUD_NAME` / `_API_KEY` / `_API_SECRET` | **required once deployed** | see below |
 | `CLOUDINARY_UPLOAD_PRESET` | e.g. `ootybites-staging` | must be a **Signed** preset |
 
@@ -101,6 +102,45 @@ customers it must be `false`, which requires `MSG91_AUTH_KEY` and
 rather than pretending to send a code.
 
 ---
+
+## 3a. `TRUSTED_PROXY_HOPS` and rate limiting
+
+Rate limits for signed-out routes (OTP request and verify, admin and dealer
+login) are keyed on the client's IP address. Behind a proxy that address comes
+from `X-Forwarded-For` — a header the client can also send itself.
+
+The API therefore believes only the entries its own proxies appended. A proxy
+appends on the right, so with `N` trusted hops the client is the `N`th entry
+from the right and anything further left is ignored.
+
+- **Railway:** one hop. This is the default outside development; leave it unset.
+- **Railway behind Cloudflare (or any extra proxy):** `2`.
+- **Local development:** `0`, the default there — the header is ignored.
+
+Getting this wrong fails in one of two ways. Too low and every visitor shares
+the proxy's address, so they all share one rate-limit bucket and login locks up
+for everyone. Too high and a client can forge its address and walk past the
+limits. The boot log prints the value in use:
+
+```
+{"msg":"config loaded","env":"staging","trusted_proxy_hops":1}
+```
+
+## 3c. Supabase's public API is locked out (migration 0021)
+
+Supabase exposes every table through its REST API to the `anon` and
+`authenticated` roles. This app never uses that API, so migration
+`0021_enable_rls.sql` enables row level security on every table and revokes
+those roles' grants. The API is unaffected because it connects as the tables'
+**owner**, which RLS does not apply to.
+
+Verified locally with a non-superuser owner and Supabase-style roles: the API
+worked normally, while `anon` - even with its grants restored - saw no rows and
+could not insert or delete.
+
+**Keep `DATABASE_URL` on the role that ran the migrations** (`postgres` on
+Supabase). Pointing it at a different, non-owner role would subject the API to
+RLS and every query would return nothing.
 
 ## 3b. Cloudinary is not optional once deployed
 

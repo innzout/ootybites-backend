@@ -2,14 +2,26 @@ package handlers
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
+	"time"
 
+	"github.com/innzout/ootybites/internal/middleware"
+	"github.com/innzout/ootybites/internal/redact"
 	"github.com/innzout/ootybites/internal/services"
 	"github.com/innzout/ootybites/internal/validators"
 	"github.com/innzout/ootybites/pkg/response"
 )
 
 // --- Customer OTP login (build step 3) ---
+
+// OTP codes one phone number may be sent per window, whoever asks. Dev mode
+// sends no SMS and shares one machine between every test, so it is relaxed.
+const (
+	otpPerPhoneMax    = 5
+	otpPerPhoneMaxDev = 100
+	otpPerPhoneWindow = 15 * time.Minute
+)
 
 type otpRequestBody struct {
 	Phone string `json:"phone"`
@@ -26,6 +38,21 @@ func (h *Handlers) OTPRequest(w http.ResponseWriter, r *http.Request) {
 		"phone": validators.PhoneIN(body.Phone),
 	}); fields != nil {
 		response.FailFields(w, fields)
+		return
+	}
+
+	// Cap codes per phone number as well as per client. The route limit is keyed
+	// by IP, so on its own it lets one person request codes for somebody else's
+	// number from many addresses - which, once real SMS is on, is both a way to
+	// harass that number and a way to spend the SMS budget. A limiter error
+	// fails open, the same as the route limits.
+	phoneMax := otpPerPhoneMax
+	if h.cfg.OTPDevMode {
+		phoneMax = otpPerPhoneMaxDev
+	}
+	if ok, err := h.limiter.AllowN(r.Context(), "rl:otp_phone:"+body.Phone, phoneMax, otpPerPhoneWindow); err == nil && !ok {
+		response.Fail(w, http.StatusTooManyRequests, response.CodeRateLimited,
+			"Too many codes requested for this number. Please try again later.")
 		return
 	}
 
@@ -71,6 +98,7 @@ func (h *Handlers) OTPVerify(w http.ResponseWriter, r *http.Request) {
 
 	tok, cust, err := h.auth.VerifyOTP(r.Context(), body.Phone, body.OTP)
 	if errors.Is(err, services.ErrOTPAttemptsExceeded) {
+		slog.Warn("otp locked after repeated wrong codes", "phone", redact.Phone(body.Phone), "ip", middleware.ClientIP(r))
 		response.Fail(w, http.StatusUnauthorized, response.CodeUnauthorized,
 			"Too many incorrect attempts. Please request a new code.")
 		return
@@ -109,6 +137,8 @@ func (h *Handlers) AdminLogin(w http.ResponseWriter, r *http.Request) {
 
 	tok, err := h.auth.AdminLogin(r.Context(), body.Username, body.Password)
 	if errors.Is(err, services.ErrInvalidCredentials) {
+		// Security event: a run of these from one address is a password guess.
+		slog.Warn("admin login failed", "username", redact.Username(body.Username), "ip", middleware.ClientIP(r))
 		response.Fail(w, http.StatusUnauthorized, response.CodeUnauthorized, "Invalid username or password")
 		return
 	}

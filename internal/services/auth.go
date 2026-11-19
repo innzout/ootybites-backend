@@ -14,6 +14,7 @@ import (
 	"github.com/innzout/ootybites/internal/db"
 	"github.com/innzout/ootybites/internal/models"
 	"github.com/innzout/ootybites/internal/password"
+	"github.com/innzout/ootybites/internal/redact"
 	"github.com/innzout/ootybites/internal/token"
 	"github.com/jackc/pgx/v5"
 )
@@ -59,7 +60,7 @@ func (a *Auth) RequestOTP(ctx context.Context, phone string) (devCode string, er
 	if a.cfg.OTPDevMode {
 		a.otp.Set(phone, code, otpTTL)
 		a.resetAttempts(phone)
-		slog.Info("dev OTP issued", "phone", phone, "code", code)
+		slog.Info("dev OTP issued", "phone", redact.Phone(phone), "code", code) // dev mode only
 		return code, nil
 	}
 
@@ -70,12 +71,12 @@ func (a *Auth) RequestOTP(ctx context.Context, phone string) (devCode string, er
 	// customer never received — and any previously issued code stays valid.
 	if err := a.sms.SendOTP(ctx, phone, code); err != nil {
 		// The code must never reach the log in production.
-		slog.Error("otp send failed", "phone", phone, "err", err)
+		slog.Error("otp send failed", "phone", redact.Phone(phone), "err", err)
 		return "", err
 	}
 	a.otp.Set(phone, code, otpTTL)
 	a.resetAttempts(phone)
-	slog.Info("otp sent", "phone", phone)
+	slog.Info("otp sent", "phone", redact.Phone(phone))
 	return "", nil
 }
 
@@ -195,6 +196,9 @@ func (a *Auth) AdminLogin(ctx context.Context, username, plain string) (string, 
 		`SELECT id, password_hash, role FROM admins WHERE username = $1`, username).
 		Scan(&id, &hash, &role)
 	if errors.Is(err, pgx.ErrNoRows) {
+		// Same cost as a wrong password, so timing does not reveal whether
+		// the username exists.
+		password.EqualiseTiming(plain)
 		return "", ErrInvalidCredentials
 	}
 	if err != nil {
