@@ -132,7 +132,29 @@ func (s *Orders) PreviewCoupon(ctx context.Context, customerID string, items []C
 // PlaceOrder re-validates the cart, recomputes money authoritatively, decrements
 // stock (guarding oversell), and writes the order + items + first history row
 // (+ coupon redemption) in a single transaction (ARCHITECTURE §6).
-func (s *Orders) PlaceOrder(ctx context.Context, customerID string, items []CartItemInput, code string, ship ShippingInput, deliveryNote string) (*models.Order, error) {
+// existingForKey returns the order this customer already placed with the given
+// idempotency key, or nil. q is the pool or a transaction.
+func (s *Orders) existingForKey(ctx context.Context, q interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, customerID, idemKey string) (*models.Order, error) {
+	if idemKey == "" {
+		return nil, nil
+	}
+	var id string
+	err := q.QueryRow(ctx,
+		`SELECT id FROM orders WHERE customer_id=$1 AND idempotency_key=$2`, customerID, idemKey).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("idempotency lookup: %w", err)
+	}
+	return s.GetForCustomer(ctx, customerID, id)
+}
+
+// PlaceOrder creates an order. idemKey, when non-empty, makes the call
+// idempotent per customer: a repeat returns the order already created.
+func (s *Orders) PlaceOrder(ctx context.Context, customerID string, items []CartItemInput, code string, ship ShippingInput, deliveryNote, idemKey string) (*models.Order, error) {
 	// The customer id comes from a verified JWT, but the account could have been
 	// removed (e.g. data reset). Fail cleanly with a re-login signal, not a 500.
 	var exists bool
@@ -141,6 +163,15 @@ func (s *Orders) PlaceOrder(ctx context.Context, customerID string, items []Cart
 	}
 	if !exists {
 		return nil, ErrSessionInvalid
+	}
+
+	// A retry of an order that already went through. Checked before the cart is
+	// re-validated, because validation can reject a retry of an order that
+	// succeeded: if the product was unpublished in between, the customer would be
+	// told their order failed when it had gone through. (Stock is not the risk
+	// here - it is enforced later, after the locked recheck below.)
+	if prior, err := s.existingForKey(ctx, s.db, customerID, idemKey); err != nil || prior != nil {
+		return prior, err
 	}
 
 	lines, subtotal, err := s.validateCart(ctx, items)
@@ -176,6 +207,18 @@ func (s *Orders) PlaceOrder(ctx context.Context, customerID string, items []Cart
 		return nil, fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
+
+	// Two copies of the same request can arrive together (a double tap, or a
+	// retry racing the original). Serialise them on the key; the second waits
+	// here, then sees the first one's committed order and returns it.
+	if idemKey != "" {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, customerID+":"+idemKey); err != nil {
+			return nil, fmt.Errorf("idempotency lock: %w", err)
+		}
+		if prior, err := s.existingForKey(ctx, tx, customerID, idemKey); err != nil || prior != nil {
+			return prior, err
+		}
+	}
 
 	// Fulfilment: try the local hub first (→ 24-hour express). If its stock can
 	// cover the whole cart, it's decremented there; otherwise fall back to the
@@ -220,13 +263,13 @@ func (s *Orders) PlaceOrder(ctx context.Context, customerID string, items []Cart
 		`INSERT INTO orders
 		   (order_number, customer_id, status, subtotal, discount_amount, coupon_id, coupon_code,
 		    total, payment_method, ship_name, ship_phone, ship_line1, ship_line2, ship_city, ship_state, ship_pincode,
-		    dealer_id, hub_id, is_express, ship_lat, ship_lng, delivery_note)
-		 VALUES ($1,$2,'placed',$3,$4,$5,$6,$7,'cod',$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+		    dealer_id, hub_id, is_express, ship_lat, ship_lng, delivery_note, idempotency_key)
+		 VALUES ($1,$2,'placed',$3,$4,$5,$6,$7,'cod',$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,NULLIF($21,''))
 		 RETURNING id, order_number, customer_id, status, subtotal, discount_amount, coupon_code, total,
 		           payment_method, ship_name, ship_phone, ship_line1, ship_line2, ship_city, ship_state, ship_pincode, ship_lat, ship_lng, placed_at, delivery_note`,
 		orderNumber, customerID, subtotal, discount, couponID, couponCode, total,
 		ship.Name, ship.Phone, ship.Line1, ship.Line2, ship.City, ship.State, ship.Pincode,
-		dealerID, hubID, express, ship.Lat, ship.Lng, notePtr).
+		dealerID, hubID, express, ship.Lat, ship.Lng, notePtr, idemKey).
 		Scan(&o.ID, &o.OrderNumber, &o.CustomerID, &o.Status, &o.Subtotal, &o.DiscountAmount, &o.CouponCode, &o.Total,
 			&o.PaymentMethod, &o.ShipName, &o.ShipPhone, &o.ShipLine1, &o.ShipLine2, &o.ShipCity, &o.ShipState, &o.ShipPincode, &o.ShipLat, &o.ShipLng, &o.PlacedAt, &o.DeliveryNote)
 	if err != nil {
@@ -491,29 +534,6 @@ func (s *Orders) Reorder(ctx context.Context, customerID, orderID string) ([]Reo
 			return nil, err
 		}
 		out = append(out, l)
-	}
-	return out, rows.Err()
-}
-
-// ListForCustomer returns a customer's orders (newest first), without items.
-func (s *Orders) ListForCustomer(ctx context.Context, customerID string) ([]models.Order, error) {
-	rows, err := s.db.Query(ctx,
-		`SELECT id, order_number, customer_id, status, subtotal, discount_amount, coupon_code, total,
-		        payment_method, ship_name, ship_phone, ship_line1, ship_line2, ship_city, ship_state, ship_pincode, placed_at, is_express
-		 FROM orders WHERE customer_id=$1 ORDER BY placed_at DESC`, customerID)
-	if err != nil {
-		return nil, fmt.Errorf("list orders: %w", err)
-	}
-	defer rows.Close()
-	out := []models.Order{}
-	for rows.Next() {
-		var o models.Order
-		if err := rows.Scan(&o.ID, &o.OrderNumber, &o.CustomerID, &o.Status, &o.Subtotal, &o.DiscountAmount,
-			&o.CouponCode, &o.Total, &o.PaymentMethod, &o.ShipName, &o.ShipPhone, &o.ShipLine1, &o.ShipLine2,
-			&o.ShipCity, &o.ShipState, &o.ShipPincode, &o.PlacedAt, &o.IsExpress); err != nil {
-			return nil, err
-		}
-		out = append(out, o)
 	}
 	return out, rows.Err()
 }

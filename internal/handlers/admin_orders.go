@@ -16,11 +16,37 @@ import (
 
 // AdminListOrders serves the admin tracking screen: filter by status/month/range,
 // sort, paginate. Default is status=placed oldest-first (surfaced by the client).
+// maxSearchLen bounds free-text search parameters.
+const maxSearchLen = 100
+
 func (h *Handlers) AdminListOrders(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	page, _ := strconv.Atoi(q.Get("page"))
 	limit, _ := strconv.Atoi(q.Get("limit"))
+	// A malformed date used to reach Postgres as a failed cast and come back
+	// as a 500. Reject it here with a field error instead.
+	fields := map[string]string{}
+	for _, k := range []string{"from", "to"} {
+		if v := q.Get(k); v != "" {
+			if _, err := time.Parse("2006-01-02", v); err != nil {
+				fields[k] = "Use a date in YYYY-MM-DD format"
+			}
+		}
+	}
+	if v := q.Get("month"); v != "" {
+		if _, err := time.Parse("2006-01", v); err != nil {
+			fields["month"] = "Use a month in YYYY-MM format"
+		}
+	}
+	if len(q.Get("q")) > maxSearchLen {
+		fields["q"] = "Search is too long"
+	}
+	if len(fields) > 0 {
+		response.FailFields(w, fields)
+		return
+	}
 	orders, total, err := h.adminOrders.List(r.Context(), services.OrderFilter{
+		Q:      q.Get("q"),
 		Status: q.Get("status"),
 		Month:  q.Get("month"),
 		From:   q.Get("from"),
@@ -175,4 +201,29 @@ func (h *Handlers) AdminOrdersMap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response.OK(w, map[string]any{"points": points})
+}
+
+// scopedOrderList serves a dealer's or customer's own order list through the
+// same filtered, paginated query the admin list uses. scope carries the owner
+// id taken from the token; the request may narrow the list but never widen it.
+func (h *Handlers) scopedOrderList(w http.ResponseWriter, r *http.Request, scope services.OrderFilter) {
+	q := r.URL.Query()
+	if len(q.Get("q")) > maxSearchLen {
+		response.FailFields(w, map[string]string{"q": "Search is too long"})
+		return
+	}
+	page, _ := strconv.Atoi(q.Get("page"))
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	scope.Q = q.Get("q")
+	scope.Status = q.Get("status")
+	scope.Sort = q.Get("sort")
+	scope.Order = q.Get("order")
+	scope.Page = page
+	scope.Limit = limit
+	orders, total, err := h.adminOrders.List(r.Context(), scope)
+	if err != nil {
+		response.Fail(w, http.StatusInternalServerError, response.CodeInternal, "Could not load orders")
+		return
+	}
+	response.OK(w, map[string]any{"orders": orders, "total": total})
 }

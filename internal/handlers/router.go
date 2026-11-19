@@ -18,7 +18,9 @@ func (h *Handlers) Router() http.Handler {
 	r.Use(middleware.Recover)
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Logger)
+	r.Use(middleware.SecurityHeaders)
 	r.Use(middleware.CORS(h.cfg.CORSOrigins, h.cfg.IsDev()))
+	r.Use(middleware.BodyLimit)
 
 	secret := h.cfg.JWTSecret
 
@@ -27,7 +29,7 @@ func (h *Handlers) Router() http.Handler {
 	r.Get("/readyz", h.Ready)
 
 	// Serve locally-uploaded images (public read).
-	r.Handle("/uploads/*", http.StripPrefix("/uploads/", http.FileServer(http.Dir(uploadsDir))))
+	r.Handle("/uploads/*", uploadsHandler())
 
 	r.Route("/api", func(api chi.Router) {
 		// ---------------- PUBLIC ----------------
@@ -56,6 +58,9 @@ func (h *Handlers) Router() http.Handler {
 			pub.Get("/settings", h.PublicSettings)
 			pub.Get("/pages/{slug}", h.PublicGetPage)
 			pub.Get("/express/areas", h.ExpressAreas)
+			// Public and computed per request, so limited like the other open lookups.
+			pub.With(middleware.RateLimit(h.limiter, "express_nearest", 30, time.Minute)).
+				Get("/express/nearest", h.ExpressNearest)
 			pub.Get("/express/products", h.ExpressProducts)
 			pub.Post("/express-check", h.ExpressCheck)
 

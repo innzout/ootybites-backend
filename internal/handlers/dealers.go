@@ -2,11 +2,13 @@ package handlers
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/innzout/ootybites/internal/middleware"
 	"github.com/innzout/ootybites/internal/models"
+	"github.com/innzout/ootybites/internal/redact"
 	"github.com/innzout/ootybites/internal/services"
 	"github.com/innzout/ootybites/internal/token"
 	"github.com/innzout/ootybites/internal/validators"
@@ -150,8 +152,16 @@ func (h *Handlers) DealerLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d, err := h.dealers.Authenticate(r.Context(), b.Username, b.Password)
-	if err != nil {
+	if errors.Is(err, services.ErrInvalidLogin) {
+		slog.Warn("dealer login failed", "username", redact.Username(b.Username), "ip", middleware.ClientIP(r))
 		response.Fail(w, http.StatusUnauthorized, response.CodeUnauthorized, "Invalid username or password")
+		return
+	}
+	if err != nil {
+		// Previously every error answered "Invalid username or password", so a
+		// database outage looked to the dealer like a wrong password.
+		slog.Error("dealer login lookup failed", "error", err)
+		response.Fail(w, http.StatusInternalServerError, response.CodeInternal, "Could not sign in. Please try again shortly.")
 		return
 	}
 	tok, err := token.IssueDealer(h.cfg.JWTSecret, d.ID, d.Username)
@@ -163,13 +173,7 @@ func (h *Handlers) DealerLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) DealerListOrders(w http.ResponseWriter, r *http.Request) {
-	dealerID := middleware.SubjectFrom(r.Context())
-	orders, err := h.adminOrders.ListForDealer(r.Context(), dealerID)
-	if err != nil {
-		response.Fail(w, http.StatusInternalServerError, response.CodeInternal, "Could not load orders")
-		return
-	}
-	response.OK(w, map[string]any{"orders": orders})
+	h.scopedOrderList(w, r, services.OrderFilter{DealerID: middleware.SubjectFrom(r.Context())})
 }
 
 func (h *Handlers) DealerGetOrder(w http.ResponseWriter, r *http.Request) {

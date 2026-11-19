@@ -117,7 +117,9 @@ func seed(t *testing.T, pool *db.Pool) fixture {
 	t.Cleanup(func() {
 		c := context.Background()
 		// product cascades to variants and reviews; orders are removed by id.
-		pool.Exec(c, `DELETE FROM orders WHERE id = ANY($1)`, []string{f.buyerOrder, placedOrder})
+		// Every order for these customers, not just the two seeded here: tests
+		// that place orders through the service add more.
+		pool.Exec(c, `DELETE FROM orders WHERE customer_id = ANY($1)`, []string{f.buyerID, f.nonBuyerID})
 		pool.Exec(c, `DELETE FROM products WHERE id = $1`, f.productID)
 		pool.Exec(c, `DELETE FROM customers WHERE id = ANY($1)`, []string{f.buyerID, f.nonBuyerID})
 	})

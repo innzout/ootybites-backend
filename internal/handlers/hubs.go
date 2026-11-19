@@ -3,6 +3,7 @@ package handlers
 import (
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/innzout/ootybites/internal/services"
@@ -232,4 +233,22 @@ func (h *Handlers) ExpressProducts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response.OK(w, map[string]any{"products": products, "hub_name": area.HubName})
+}
+
+// ExpressNearest (public) ranks serviceable areas by how close their hub is to
+// the shopper's location, for the express page's "Use my location". The
+// coordinates are used for the calculation and not stored or logged.
+func (h *Handlers) ExpressNearest(w http.ResponseWriter, r *http.Request) {
+	lat, errLat := strconv.ParseFloat(r.URL.Query().Get("lat"), 64)
+	lng, errLng := strconv.ParseFloat(r.URL.Query().Get("lng"), 64)
+	if errLat != nil || errLng != nil || !services.ValidCoordinate(lat, lng) {
+		response.Fail(w, http.StatusBadRequest, response.CodeValidation, "A valid lat and lng are required")
+		return
+	}
+	areas, err := h.areas.NearestServiceable(r.Context(), lat, lng)
+	if err != nil {
+		response.Fail(w, http.StatusInternalServerError, response.CodeInternal, "Could not find areas near you")
+		return
+	}
+	response.OK(w, map[string]any{"areas": areas, "radius_km": services.ExpressRadiusKm})
 }

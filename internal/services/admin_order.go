@@ -46,6 +46,12 @@ func nullUUID(id string) *string {
 
 // OrderFilter drives the admin order list query.
 type OrderFilter struct {
+	// Ownership scopes. Set by handlers from the signed-in token - never from
+	// the request - so a dealer or customer can only ever see their own orders.
+	CustomerID string
+	DealerID   string
+	// Q matches order number, customer name or phone (substring, any case).
+	Q      string
 	Status string
 	Month  string // YYYY-MM
 	From   string // YYYY-MM-DD
@@ -55,6 +61,9 @@ type OrderFilter struct {
 	Page   int
 	Limit  int
 }
+
+// likeEscaper escapes LIKE/ILIKE wildcards in user search input.
+var likeEscaper = strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`)
 
 // List returns a filtered, sorted, paginated page of orders plus the total.
 func (s *AdminOrders) List(ctx context.Context, f OrderFilter) ([]models.Order, int, error) {
@@ -72,22 +81,40 @@ func (s *AdminOrders) List(ctx context.Context, f OrderFilter) ([]models.Order, 
 		where = append(where, fmt.Sprintf(cond, len(args)))
 	}
 
+	if f.CustomerID != "" {
+		add("customer_id = $%d", f.CustomerID)
+	}
+	if f.DealerID != "" {
+		add("dealer_id = $%d", f.DealerID)
+	}
 	if f.Status != "" {
 		add("status = $%d", f.Status)
 	}
-	// Custom range wins over month when both are set.
+	// An explicit date bound wins over month. Either bound may be given alone:
+	// previously a range applied only when both were set, so "orders since
+	// the 1st" silently returned everything.
 	// Sargable date predicates: comparing `placed_at` directly lets
 	// idx_orders_status_placed / idx_orders_placed be used. Wrapping the column
 	// (placed_at::date, to_char(placed_at, ...)) makes those indexes unusable and
-	// forces a full scan of `orders` on every admin page view â exactly what the
+	// forces a full scan of `orders` on every admin page view — exactly what the
 	// "index-aware admin order list" rule exists to prevent. The upper bound is
 	// exclusive-next-day so the `to` day is still fully included.
-	if f.From != "" && f.To != "" {
-		add("placed_at >= $%d::date", f.From)
-		add("placed_at < ($%d::date + 1)", f.To)
+	if f.From != "" || f.To != "" {
+		if f.From != "" {
+			add("placed_at >= $%d::date", f.From)
+		}
+		if f.To != "" {
+			add("placed_at < ($%d::date + 1)", f.To)
+		}
 	} else if f.Month != "" {
 		add("placed_at >= to_date($%d, 'YYYY-MM')", f.Month)
 		add("placed_at < to_date($%d, 'YYYY-MM') + interval '1 month'", f.Month)
+	}
+	if q := strings.TrimSpace(f.Q); q != "" {
+		// One parameter used three times. Wildcards in the input are escaped
+		// so a search for "50%" means the text, not "anything".
+		add(`(order_number ILIKE $%[1]d ESCAPE '\' OR ship_name ILIKE $%[1]d ESCAPE '\' OR ship_phone ILIKE $%[1]d ESCAPE '\')`,
+			"%"+likeEscaper.Replace(q)+"%")
 	}
 	whereSQL := strings.Join(where, " AND ")
 
@@ -109,7 +136,7 @@ func (s *AdminOrders) List(ctx context.Context, f OrderFilter) ([]models.Order, 
 	args = append(args, f.Limit, (f.Page-1)*f.Limit)
 	q := fmt.Sprintf(
 		`SELECT id, order_number, customer_id, status, subtotal, discount_amount, coupon_code, total,
-		        payment_method, ship_name, ship_phone, ship_line1, ship_line2, ship_city, ship_state, ship_pincode, placed_at
+		        payment_method, ship_name, ship_phone, ship_line1, ship_line2, ship_city, ship_state, ship_pincode, placed_at, is_express
 		 FROM orders WHERE %s ORDER BY %s %s LIMIT $%d OFFSET $%d`,
 		whereSQL, sortCol, dir, len(args)-1, len(args))
 	rows, err := s.db.Query(ctx, q, args...)
@@ -122,7 +149,7 @@ func (s *AdminOrders) List(ctx context.Context, f OrderFilter) ([]models.Order, 
 		var o models.Order
 		if err := rows.Scan(&o.ID, &o.OrderNumber, &o.CustomerID, &o.Status, &o.Subtotal, &o.DiscountAmount,
 			&o.CouponCode, &o.Total, &o.PaymentMethod, &o.ShipName, &o.ShipPhone, &o.ShipLine1, &o.ShipLine2,
-			&o.ShipCity, &o.ShipState, &o.ShipPincode, &o.PlacedAt); err != nil {
+			&o.ShipCity, &o.ShipState, &o.ShipPincode, &o.PlacedAt, &o.IsExpress); err != nil {
 			return nil, 0, err
 		}
 		out = append(out, o)
@@ -336,29 +363,6 @@ func (s *AdminOrders) AssignDealer(ctx context.Context, orderID string, dealerID
 		return nil, fmt.Errorf("assign dealer commit: %w", err)
 	}
 	return s.Get(ctx, orderID)
-}
-
-// ListForDealer returns orders assigned to a dealer (newest first, no items).
-func (s *AdminOrders) ListForDealer(ctx context.Context, dealerID string) ([]models.Order, error) {
-	rows, err := s.db.Query(ctx,
-		`SELECT id, order_number, customer_id, status, subtotal, discount_amount, coupon_code, total,
-		        payment_method, ship_name, ship_phone, ship_line1, ship_line2, ship_city, ship_state, ship_pincode, placed_at
-		 FROM orders WHERE dealer_id=$1 ORDER BY placed_at DESC`, dealerID)
-	if err != nil {
-		return nil, fmt.Errorf("list dealer orders: %w", err)
-	}
-	defer rows.Close()
-	out := []models.Order{}
-	for rows.Next() {
-		var o models.Order
-		if err := rows.Scan(&o.ID, &o.OrderNumber, &o.CustomerID, &o.Status, &o.Subtotal, &o.DiscountAmount,
-			&o.CouponCode, &o.Total, &o.PaymentMethod, &o.ShipName, &o.ShipPhone, &o.ShipLine1, &o.ShipLine2,
-			&o.ShipCity, &o.ShipState, &o.ShipPincode, &o.PlacedAt); err != nil {
-			return nil, err
-		}
-		out = append(out, o)
-	}
-	return out, rows.Err()
 }
 
 // GetForDealer returns one of the dealer's assigned orders (with items+history).

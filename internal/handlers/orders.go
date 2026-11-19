@@ -3,6 +3,7 @@ package handlers
 import (
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/innzout/ootybites/internal/middleware"
@@ -94,6 +95,9 @@ type placeOrderBody struct {
 
 // PlaceOrder validates the cart server-side, recomputes money, and places a COD
 // order transactionally.
+// maxIdempotencyKey bounds the client-supplied key (a UUID is 36 characters).
+const maxIdempotencyKey = 100
+
 func (h *Handlers) PlaceOrder(w http.ResponseWriter, r *http.Request) {
 	var b placeOrderBody
 	if !decodeJSON(w, r, &b) {
@@ -112,7 +116,14 @@ func (h *Handlers) PlaceOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	order, err := h.orders.PlaceOrder(r.Context(), middleware.SubjectFrom(r.Context()), b.Items, b.Code, s, b.DeliveryNote)
+	// Optional. Bounded so the header cannot be used to store arbitrary data.
+	idemKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if len(idemKey) > maxIdempotencyKey {
+		response.Fail(w, http.StatusBadRequest, response.CodeValidation, "Idempotency-Key is too long")
+		return
+	}
+
+	order, err := h.orders.PlaceOrder(r.Context(), middleware.SubjectFrom(r.Context()), b.Items, b.Code, s, b.DeliveryNote, idemKey)
 	var cartErr *services.CartError
 	switch {
 	case errors.Is(err, services.ErrSessionInvalid):
@@ -128,14 +139,9 @@ func (h *Handlers) PlaceOrder(w http.ResponseWriter, r *http.Request) {
 	response.Created(w, order)
 }
 
-// ListOrders returns the customer's orders (newest first).
+// ListOrders returns a page of the customer's own orders (newest first).
 func (h *Handlers) ListOrders(w http.ResponseWriter, r *http.Request) {
-	orders, err := h.orders.ListForCustomer(r.Context(), middleware.SubjectFrom(r.Context()))
-	if err != nil {
-		response.Fail(w, http.StatusInternalServerError, response.CodeInternal, "Could not load orders")
-		return
-	}
-	response.OK(w, map[string]any{"orders": orders})
+	h.scopedOrderList(w, r, services.OrderFilter{CustomerID: middleware.SubjectFrom(r.Context())})
 }
 
 // GetOrder returns one of the customer's orders with items.
